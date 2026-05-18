@@ -1,0 +1,307 @@
+{
+  "generatedAt": "2026-05-18T07:32:29.534Z",
+  "local": "http://localhost:8080",
+  "peer": "http://172.31.51.213:8080",
+  "count": 20,
+  "trials": 3,
+  "results": [
+    {
+      "direction": "Local enp1s0f1 -> Peer 이더넷 2",
+      "trial": 1,
+      "matched": 9,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 9,
+      "lossPct": 55,
+      "error": ""
+    },
+    {
+      "direction": "Local enp1s0f3 -> Peer 이더넷",
+      "trial": 1,
+      "matched": 7,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 9,
+      "lossPct": 65,
+      "error": ""
+    },
+    {
+      "direction": "Peer 이더넷 2 -> Local enp1s0f1",
+      "trial": 1,
+      "matched": 20,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 20,
+      "lossPct": 0,
+      "error": ""
+    },
+    {
+      "direction": "Peer 이더넷 -> Local enp1s0f3",
+      "trial": 1,
+      "matched": 0,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 424,
+      "lossPct": 100,
+      "error": "marker miss/noise"
+    },
+    {
+      "direction": "Local enp1s0f1 -> Peer 이더넷 2",
+      "trial": 2,
+      "matched": 10,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 10,
+      "lossPct": 50,
+      "error": ""
+    },
+    {
+      "direction": "Local enp1s0f3 -> Peer 이더넷",
+      "trial": 2,
+      "matched": 8,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 10,
+      "lossPct": 60,
+      "error": ""
+    },
+    {
+      "direction": "Peer 이더넷 2 -> Local enp1s0f1",
+      "trial": 2,
+      "matched": 20,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 799,
+      "lossPct": 0,
+      "error": ""
+    },
+    {
+      "direction": "Peer 이더넷 -> Local enp1s0f3",
+      "trial": 2,
+      "matched": 0,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 0,
+      "lossPct": 100,
+      "error": "fetch failed"
+    },
+    {
+      "direction": "Local enp1s0f1 -> Peer 이더넷 2",
+      "trial": 3,
+      "matched": 9,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 10,
+      "lossPct": 55,
+      "error": ""
+    },
+    {
+      "direction": "Local enp1s0f3 -> Peer 이더넷",
+      "trial": 3,
+      "matched": 7,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 7,
+      "lossPct": 65,
+      "error": ""
+    },
+    {
+      "direction": "Peer 이더넷 2 -> Local enp1s0f1",
+      "trial": 3,
+      "matched": 20,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 20,
+      "lossPct": 0,
+      "error": ""
+    },
+    {
+      "direction": "Peer 이더넷 -> Local enp1s0f3",
+      "trial": 3,
+      "matched": 20,
+      "expected": 20,
+      "sent": 20,
+      "captureRows": 21,
+      "lossPct": 0,
+      "error": ""
+    }
+  ],
+  "summary": [
+    {
+      "direction": "Local enp1s0f1 -> Peer 이더넷 2",
+      "sent": 60,
+      "matched": 28,
+      "rxPct": 46.7,
+      "lossPct": 53.3,
+      "apiErrors": 3,
+      "perfectTrials": 0,
+      "partialTrials": 3,
+      "zeroTrials": 0,
+      "verdict": "MEASUREMENT UNSTABLE",
+      "trials": [
+        {
+          "direction": "Local enp1s0f1 -> Peer 이더넷 2",
+          "trial": 1,
+          "matched": 9,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 9,
+          "lossPct": 55,
+          "error": ""
+        },
+        {
+          "direction": "Local enp1s0f1 -> Peer 이더넷 2",
+          "trial": 2,
+          "matched": 10,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 10,
+          "lossPct": 50,
+          "error": ""
+        },
+        {
+          "direction": "Local enp1s0f1 -> Peer 이더넷 2",
+          "trial": 3,
+          "matched": 9,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 10,
+          "lossPct": 55,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "direction": "Local enp1s0f3 -> Peer 이더넷",
+      "sent": 60,
+      "matched": 22,
+      "rxPct": 36.7,
+      "lossPct": 63.3,
+      "apiErrors": 3,
+      "perfectTrials": 0,
+      "partialTrials": 3,
+      "zeroTrials": 0,
+      "verdict": "MEASUREMENT UNSTABLE",
+      "trials": [
+        {
+          "direction": "Local enp1s0f3 -> Peer 이더넷",
+          "trial": 1,
+          "matched": 7,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 9,
+          "lossPct": 65,
+          "error": ""
+        },
+        {
+          "direction": "Local enp1s0f3 -> Peer 이더넷",
+          "trial": 2,
+          "matched": 8,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 10,
+          "lossPct": 60,
+          "error": ""
+        },
+        {
+          "direction": "Local enp1s0f3 -> Peer 이더넷",
+          "trial": 3,
+          "matched": 7,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 7,
+          "lossPct": 65,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "direction": "Peer 이더넷 2 -> Local enp1s0f1",
+      "sent": 60,
+      "matched": 60,
+      "rxPct": 100,
+      "lossPct": 0,
+      "apiErrors": 3,
+      "perfectTrials": 3,
+      "partialTrials": 0,
+      "zeroTrials": 0,
+      "verdict": "MEASUREMENT UNSTABLE",
+      "trials": [
+        {
+          "direction": "Peer 이더넷 2 -> Local enp1s0f1",
+          "trial": 1,
+          "matched": 20,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 20,
+          "lossPct": 0,
+          "error": ""
+        },
+        {
+          "direction": "Peer 이더넷 2 -> Local enp1s0f1",
+          "trial": 2,
+          "matched": 20,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 799,
+          "lossPct": 0,
+          "error": ""
+        },
+        {
+          "direction": "Peer 이더넷 2 -> Local enp1s0f1",
+          "trial": 3,
+          "matched": 20,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 20,
+          "lossPct": 0,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "direction": "Peer 이더넷 -> Local enp1s0f3",
+      "sent": 60,
+      "matched": 20,
+      "rxPct": 33.3,
+      "lossPct": 66.7,
+      "apiErrors": 3,
+      "perfectTrials": 1,
+      "partialTrials": 0,
+      "zeroTrials": 2,
+      "verdict": "MEASUREMENT UNSTABLE",
+      "trials": [
+        {
+          "direction": "Peer 이더넷 -> Local enp1s0f3",
+          "trial": 1,
+          "matched": 0,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 424,
+          "lossPct": 100,
+          "error": "marker miss/noise"
+        },
+        {
+          "direction": "Peer 이더넷 -> Local enp1s0f3",
+          "trial": 2,
+          "matched": 0,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 0,
+          "lossPct": 100,
+          "error": "fetch failed"
+        },
+        {
+          "direction": "Peer 이더넷 -> Local enp1s0f3",
+          "trial": 3,
+          "matched": 20,
+          "expected": 20,
+          "sent": 20,
+          "captureRows": 21,
+          "lossPct": 0,
+          "error": ""
+        }
+      ]
+    }
+  ]
+}

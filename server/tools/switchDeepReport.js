@@ -83,12 +83,30 @@ function summarize(results) {
     const rows = results.filter((r) => r.direction === d.name);
     const sent = rows.reduce((sum, r) => sum + r.expected, 0);
     const matched = rows.reduce((sum, r) => sum + r.matched, 0);
+    const apiErrors = rows.filter((r) => r.error || !r.startOk || !r.sendOk || !r.captureOk).length;
+    const perfectTrials = rows.filter((r) => r.matched >= r.expected).length;
+    const partialTrials = rows.filter((r) => r.matched > 0 && r.matched < r.expected).length;
+    const zeroTrials = rows.filter((r) => r.matched === 0).length;
+    const verdict = apiErrors
+      ? 'MEASUREMENT UNSTABLE'
+      : perfectTrials === rows.length
+        ? 'PASS'
+        : partialTrials || matched > 0
+          ? 'CAPTURE UNDERCOUNT'
+          : zeroTrials === rows.length
+            ? 'NO MATCH'
+            : 'CHECK';
     return {
       direction: d.name,
       sent,
       matched,
       rxPct: Number((100 * matched / sent).toFixed(1)),
       lossPct: Number((100 * (sent - matched) / sent).toFixed(1)),
+      apiErrors,
+      perfectTrials,
+      partialTrials,
+      zeroTrials,
+      verdict,
       trials: rows
     };
   });
@@ -101,12 +119,22 @@ function writeReport(report) {
   const labels = report.summary.map((s) => s.direction);
   const rx = report.summary.map((s) => s.rxPct);
   const loss = report.summary.map((s) => s.lossPct);
+  const apiErrors = report.summary.map((s) => s.apiErrors);
+  const verdictColor = (v) => ({
+    PASS: '#12803a',
+    'CAPTURE UNDERCOUNT': '#b9651a',
+    'MEASUREMENT UNSTABLE': '#b45309',
+    'NO MATCH': '#b91c1c',
+    CHECK: '#475569'
+  }[v] || '#475569');
   const totalSent = report.summary.reduce((sum, s) => sum + s.sent, 0);
   const totalMatched = report.summary.reduce((sum, s) => sum + s.matched, 0);
+  const stableDirections = report.summary.filter((s) => s.verdict === 'PASS').length;
+  const undercountDirections = report.summary.filter((s) => s.verdict === 'CAPTURE UNDERCOUNT').length;
   const rows = report.summary.map((s) =>
-    `<tr><td>${s.direction}</td><td>${s.matched}/${s.sent}</td><td>${s.rxPct}%</td><td>${s.lossPct}%</td><td>${s.trials.map((t) => `${t.matched}/${t.expected}${t.error ? ` (${t.error})` : ''}`).join(' · ')}</td></tr>`
+    `<tr><td>${s.direction}</td><td><span class="pill" style="background:${verdictColor(s.verdict)}">${s.verdict}</span></td><td>${s.matched}/${s.sent}</td><td>${s.rxPct}%</td><td>${s.apiErrors}</td><td>${s.trials.map((t) => `${t.matched}/${t.expected}${t.error ? ` (${t.error})` : ''}`).join(' · ')}</td></tr>`
   ).join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Switch Deep Test Report</title><script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script><style>body{margin:24px;font:14px/1.45 system-ui;color:#17202a;background:#f6f8fb}.wrap{max-width:1180px;margin:auto}.hero{background:linear-gradient(135deg,#10262c,#0f6f78);color:white;border-radius:20px;padding:22px 24px;box-shadow:0 18px 45px #0f172a22}.hero h1{margin:0 0 6px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}.card,.chart,table{background:white;border:1px solid #d9e2ea;border-radius:16px;box-shadow:0 4px 16px #0f172a10}.card{padding:14px}.card span{font-size:11px;color:#64748b;text-transform:uppercase;font-weight:800}.card strong{display:block;font-size:26px}.charts{display:grid;grid-template-columns:1fr 1fr;gap:16px}.chart{padding:16px}table{width:100%;border-collapse:separate;border-spacing:0;margin-top:16px;overflow:hidden}th,td{padding:10px 12px;border-bottom:1px solid #e5edf3;text-align:left}th{background:#edf6f7;font-size:12px;text-transform:uppercase;color:#456}td:nth-child(n+2){font-family:ui-monospace,SFMono-Regular,monospace}@media(max-width:900px){.cards,.charts{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="hero"><h1>Switch Deep Test Report</h1><div>${report.generatedAt}</div><div>Local ${report.local} · Peer ${report.peer} · ${report.trials} trials · ${report.count} frames/trial</div></div><div class="cards"><div class="card"><span>Total Frames</span><strong>${totalSent}</strong></div><div class="card"><span>Matched</span><strong>${totalMatched}</strong></div><div class="card"><span>Overall RX</span><strong>${(100 * totalMatched / totalSent).toFixed(1)}%</strong></div><div class="card"><span>Directions</span><strong>${report.summary.length}</strong></div></div><div class="charts"><div class="chart"><h3>Receive Rate by Direction</h3><canvas id="rx"></canvas></div><div class="chart"><h3>Loss Rate by Direction</h3><canvas id="loss"></canvas></div></div><table><thead><tr><th>Direction</th><th>Matched</th><th>RX</th><th>Loss</th><th>Trials</th></tr></thead><tbody>${rows}</tbody></table></div><script>const labels=${JSON.stringify(labels)};new Chart(document.getElementById('rx'),{type:'bar',data:{labels,datasets:[{label:'RX %',data:${JSON.stringify(rx)},backgroundColor:'#0f6f78'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100}}}});new Chart(document.getElementById('loss'),{type:'bar',data:{labels,datasets:[{label:'Loss %',data:${JSON.stringify(loss)},backgroundColor:'#b9651a'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100}}}});</script></body></html>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Switch Deep Test Report</title><script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script><style>body{margin:24px;font:14px/1.45 ui-sans-serif,system-ui;color:#17202a;background:linear-gradient(180deg,#eef5f6,#f8fafc 280px)}.wrap{max-width:1220px;margin:auto}.hero{background:radial-gradient(circle at 85% 15%,rgba(34,197,94,.24),transparent 170px),linear-gradient(135deg,#10262c,#0f6f78);color:white;border-radius:24px;padding:24px 26px;box-shadow:0 18px 45px #0f172a26}.hero h1{margin:0 0 6px;font-size:30px;letter-spacing:-.03em}.hero p{max-width:900px;color:#d9fbff}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:16px 0}.card,.chart,table,.note{background:white;border:1px solid #d9e2ea;border-radius:18px;box-shadow:0 4px 16px #0f172a10}.card{padding:14px}.card span{font-size:11px;color:#64748b;text-transform:uppercase;font-weight:800}.card strong{display:block;font-size:26px}.charts{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}.chart{padding:16px}.chart h3{margin:0 0 10px}.note{padding:14px 16px;margin:16px 0;color:#334155}.note strong{color:#0f6f78}table{width:100%;border-collapse:separate;border-spacing:0;margin-top:16px;overflow:hidden}th,td{padding:10px 12px;border-bottom:1px solid #e5edf3;text-align:left;vertical-align:top}th{background:#edf6f7;font-size:12px;text-transform:uppercase;color:#456}td:nth-child(n+3){font-family:ui-monospace,SFMono-Regular,monospace}.pill{display:inline-block;color:white;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:900;white-space:nowrap}.muted{color:#64748b}@media(max-width:900px){.cards,.charts{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="hero"><h1>Switch Deep Test Report</h1><div>${report.generatedAt}</div><p>Local ${report.local} · Peer ${report.peer} · ${report.trials} trials · ${report.count} frames/trial. This report separates forwarding evidence from capture measurement quality so capture undercount does not look identical to a switch forwarding failure.</p></div><div class="cards"><div class="card"><span>Total Frames</span><strong>${totalSent}</strong></div><div class="card"><span>Matched</span><strong>${totalMatched}</strong></div><div class="card"><span>Overall Marker RX</span><strong>${(100 * totalMatched / totalSent).toFixed(1)}%</strong></div><div class="card"><span>Clean Directions</span><strong>${stableDirections}/${report.summary.length}</strong></div><div class="card"><span>Capture Undercount</span><strong>${undercountDirections}</strong></div></div><div class="note"><strong>Read this first:</strong> PASS means every marker frame was captured. CAPTURE UNDERCOUNT means send/capture APIs worked and some expected markers arrived, but the capture side did not retain every frame. MEASUREMENT UNSTABLE means at least one API call failed or timed out, so the number is not a pure switch result.</div><div class="charts"><div class="chart"><h3>Marker Receive Rate by Direction</h3><canvas id="rx"></canvas></div><div class="chart"><h3>API / Measurement Errors</h3><canvas id="api"></canvas></div></div><div class="chart" style="margin-top:16px"><h3>Loss / Undercount Rate</h3><canvas id="loss"></canvas></div><table><thead><tr><th>Direction</th><th>Verdict</th><th>Matched</th><th>RX</th><th>API Errors</th><th>Trials</th></tr></thead><tbody>${rows}</tbody></table><p class="muted">Generated artifact: <code>/reports/switch-deep-latest.html</code> and <code>/reports/switch-deep-latest.json</code>.</p></div><script>const labels=${JSON.stringify(labels)};new Chart(document.getElementById('rx'),{type:'bar',data:{labels,datasets:[{label:'RX %',data:${JSON.stringify(rx)},backgroundColor:'#0f6f78'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100}}}});new Chart(document.getElementById('api'),{type:'bar',data:{labels,datasets:[{label:'API errors',data:${JSON.stringify(apiErrors)},backgroundColor:'#dc2626'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});new Chart(document.getElementById('loss'),{type:'bar',data:{labels,datasets:[{label:'Loss / undercount %',data:${JSON.stringify(loss)},backgroundColor:'#b9651a'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100}}}});</script></body></html>`;
   fs.writeFileSync(path.join(reportsDir, 'switch-deep-latest.html'), html);
 }
 

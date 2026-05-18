@@ -17,6 +17,10 @@ yarn-error.log
 # ── Runtime data (generated, not source) ──────────────────────────────────────
 server/logs/
 server/reports/
+!server/reports/
+server/reports/*
+!server/reports/switch-deep-latest.html
+!server/reports/switch-deep-latest.json
 server/server.log
 *.log
 *.tcs
