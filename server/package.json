@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "switch:deep-report": "node tools/switchDeepReport.js",
     "install-native": "npm install serialport cap --save-optional"
   },
   "dependencies": {
