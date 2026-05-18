@@ -668,18 +668,24 @@ body.captureMode .toolbar { padding: 6px 16px; }
 
 /* ----- Serial / TTY tab ----- */
 body.serialMode .linkStrip { display: none; }
-.serialViewTT {
-  grid-template-columns: 1fr;
+
+/* serialView fills remaining height inside the HyperTerminal flex column */
+#serialView.htSubView.active {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-body.serialMode .serialPane {
-  position: fixed;
-  left: 0; right: 0;
-  top: 158px; bottom: 0;
-  z-index: 5;
-  display: grid;
-  grid-template-rows: auto auto 1fr auto;
-  gap: 8px;
+
+/* serialPane is a flex column so serialLog can grow to fill available space */
+.serialPane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 8px 10px;
+  gap: 8px;
   background: #fafbfc;
 }
 
@@ -707,6 +713,8 @@ body.serialMode .serialPane {
 }
 
 .serialLog {
+  flex: 1;
+  min-height: 0;
   margin: 0;
   padding: 10px 12px;
   background: #0b1220;
@@ -3225,16 +3233,8 @@ body:not(.controlMode) .linkStrip { display: none; }
   overflow-y: visible;
 }
 
-/* serialView — single column */
-#serialView.htSubView.active {
-  grid-template-columns: 1fr;
-  overflow: hidden;
-}
+/* serialView handled by flex rule above */
 
-/* When serial is fullscreen (serialMode), shift top below toolbar + sub-tab bar */
-body.serialMode .serialPane {
-  top: 194px;
-}
 
 /* Sub-view fade-in */
 .htSubView.active {
