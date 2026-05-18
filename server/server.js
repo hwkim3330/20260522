@@ -6,7 +6,10 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
-const workerHub = require('./services/workerHub');
+const workerHub      = require('./services/workerHub');
+const serialBridge   = require('./services/serialBridge');
+const switchProtocol = require('./services/switchProtocol');
+const packetBackend  = require('./services/packetBackend');
 
 const app  = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -28,6 +31,9 @@ app.locals.localWorkerId = LOCAL_WORKER;
 app.locals.testsDir      = testsDir;
 app.locals.macrosDir     = macrosDir;
 app.locals.reportsDir    = reportsDir;
+app.locals.serialBridge  = serialBridge;
+app.locals.switchProtocol = switchProtocol;
+app.locals.packetBackend = packetBackend;
 
 // Helper: send command to local worker, returns reply.data
 async function localCmd(command, payload = {}, timeoutMs = 15000) {
@@ -49,6 +55,11 @@ app.locals.broadcast = (msg) => {
 
 // Relay worker events (capture, serial, tabchange, …) to browser WebSocket clients
 workerHub.events.on(`event:${LOCAL_WORKER}`, (payload) => {
+  app.locals.broadcast({ type: 'workerEvent', payload });
+});
+
+// Relay native serial events to browser WebSocket clients (Linux / standalone mode)
+serialBridge.events.on('serial', (payload) => {
   app.locals.broadcast({ type: 'workerEvent', payload });
 });
 
@@ -187,4 +198,6 @@ server.listen(PORT, '0.0.0.0', () => {
   if (wifiIp) console.log(`[PacketLabManager] Network : http://${wifiIp}:${PORT}`);
   console.log(`[PacketLabManager] Worker  : ws://localhost:${PORT}/ws/worker?workerId=${LOCAL_WORKER}`);
   console.log(`[PacketLabManager] Reports : ${reportsDir}`);
+  console.log(`[PacketLabManager] Serial  : ${serialBridge.isAvailable() ? 'serialport npm ready' : 'no serialport npm (install: npm install serialport)'}`);
+  console.log(`[PacketLabManager] Packets : ${packetBackend.isAvailable() ? 'cap npm ready' : 'no cap npm (install: npm install cap)'}`);
 });

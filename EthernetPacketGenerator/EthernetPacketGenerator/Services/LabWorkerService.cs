@@ -397,9 +397,27 @@ public class LabWorkerService : IDisposable
 
     private async Task<JsonObject> SendAsync(JsonObject payload)
     {
-        var profile   = NormalizeProfile(payload);
-        var ifaceName = payload["interface"]?.GetValue<string>() ?? string.Empty;
-        var count     = payload["count"]?.GetValue<int>() ?? 1;
+        var profile    = NormalizeProfile(payload);
+        var ifaceName  = profile["interface"]?.GetValue<string>() ?? string.Empty;
+        var count      = profile["count"]?.GetValue<int>() ?? 1;
+        var intervalMs = profile["intervalMs"]?.GetValue<int>() ?? 0;
+
+        // Auto-fill srcMac from OS NIC if not provided
+        if (string.IsNullOrWhiteSpace(profile["srcMac"]?.GetValue<string>()))
+        {
+            var nics = NetworkInterface.GetAllNetworkInterfaces();
+            var nic  = nics.FirstOrDefault(n => n.Name.Equals(ifaceName, StringComparison.OrdinalIgnoreCase));
+            if (nic != null)
+            {
+                var mb = nic.GetPhysicalAddress().GetAddressBytes();
+                if (mb.Length == 6) profile["srcMac"] = string.Join(":", mb.Select(b => b.ToString("x2")));
+            }
+            if (string.IsNullOrWhiteSpace(profile["srcMac"]?.GetValue<string>()))
+            {
+                var devMac = FindDevice(ifaceName)?.MacAddress?.GetAddressBytes();
+                if (devMac?.Length == 6) profile["srcMac"] = string.Join(":", devMac.Select(b => b.ToString("x2")));
+            }
+        }
 
         var (frame, decoded) = LabPacketService.BuildFrame(profile);
 
@@ -407,17 +425,15 @@ public class LabWorkerService : IDisposable
         if (dev == null)
             throw new InvalidOperationException($"Interface not found: {ifaceName}");
 
-        int framesSent = 0;
-        long bytesSent = 0;
+        int  framesSent  = 0;
+        long bytesSent   = 0;
 
-        bool alreadyOpen = false;
-        try
+        // Skip Open() if device is already open for capture (avoids deadlock)
+        bool alreadyOpen = _captureDevices.Contains(dev);
+        if (!alreadyOpen)
         {
-            dev.Open(DeviceModes.None);
-        }
-        catch
-        {
-            alreadyOpen = true;
+            try { dev.Open(DeviceModes.None); }
+            catch { alreadyOpen = true; }
         }
 
         try
@@ -427,6 +443,8 @@ public class LabWorkerService : IDisposable
                 dev.SendPacket(frame);
                 framesSent++;
                 bytesSent += frame.Length;
+                if (intervalMs > 0 && i < count - 1)
+                    await Task.Delay(intervalMs);
             }
         }
         finally
@@ -436,8 +454,6 @@ public class LabWorkerService : IDisposable
                 try { dev.Close(); } catch { }
             }
         }
-
-        await Task.CompletedTask;
 
         var stdout = new JsonObject
         {
@@ -474,9 +490,12 @@ public class LabWorkerService : IDisposable
         int framesSent = 0;
         long bytesSent = 0;
 
-        bool alreadyOpen = false;
-        try { dev.Open(DeviceModes.None); }
-        catch { alreadyOpen = true; }
+        bool alreadyOpen = _captureDevices.Contains(dev);
+        if (!alreadyOpen)
+        {
+            try { dev.Open(DeviceModes.None); }
+            catch { alreadyOpen = true; }
+        }
 
         try
         {
