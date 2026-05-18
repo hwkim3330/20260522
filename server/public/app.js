@@ -5203,19 +5203,26 @@ async function caStartCapture() {
   const res = $('caResult'); if (res) { res.textContent = ''; res.className = 'caResult'; }
   caUpdateCount();
 
+  const startBtn = $('caStartBtn');
+  const stopBtn  = $('caStopBtn');
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = '…'; }
+
+  let startData;
   try {
-    await api('/api/remote-capture/start', {
+    startData = await api('/api/remote-capture/start', {
       method: 'POST',
       body: JSON.stringify({ peerUrl: caState.peerUrl, interfaces: caState.selectedIfaces })
     });
   } catch (err) {
     toast(`Capture start failed: ${err.message}`, 'fail');
+    if (empty) { empty.classList.remove('hidden'); empty.textContent = `Capture failed: ${err.message}`; }
+    if (startBtn) { startBtn.disabled = false; startBtn.textContent = '▶ Start Capture'; }
     return;
   }
 
+  if (startData && startData.warning) toast(`Warning: ${startData.warning}`, 'warn');
+
   caState.isCapturing = true;
-  const startBtn = $('caStartBtn');
-  const stopBtn  = $('caStopBtn');
   if (startBtn) { startBtn.disabled = true; startBtn.textContent = '● Capturing'; }
   if (stopBtn)  stopBtn.disabled = false;
 

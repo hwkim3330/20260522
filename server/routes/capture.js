@@ -73,11 +73,28 @@ router.post('/capture/start', async (req, res) => {
       const data = await req.app.locals.localCmd('startCapture', { ...body, bpfFilter }, 10000);
       return res.json({ ok: true, bpfFilter, ...(data || {}) });
     }
-    const pb       = req.app.locals.packetBackend;
-    const ifaces   = body.interfaces || [];
+    const pb     = req.app.locals.packetBackend;
+    const ifaces = body.interfaces || [];
     pb.clearCapture();
-    const started  = pb.startCapture(ifaces, bpfFilter, () => {}, (e) => console.error('[cap]', e.message));
-    res.json({ ok: true, bpfFilter, capturing: started, interfaces: pb.getCaptureDeviceNames().length });
+    let captureErr = '';
+    pb.startCapture(ifaces, bpfFilter, () => {}, (e) => { captureErr = e.message; });
+
+    // Wait briefly so tcpdump can fail fast (permission denied, no device, etc.)
+    await new Promise(r => setTimeout(r, 350));
+
+    const stillRunning = pb.isCapturing();
+    const lastErr      = pb.getLastCaptureError ? pb.getLastCaptureError() : captureErr;
+
+    if (!stillRunning && lastErr) {
+      const hint = /permission/i.test(lastErr)
+        ? ' → fix: sudo setcap cap_net_raw,cap_net_admin+eip $(which tcpdump)  or run: sudo node server.js'
+        : /no such device|siocgifhwaddr/i.test(lastErr)
+          ? ' → interface not found; check /api/interfaces for available names'
+          : '';
+      return res.status(500).json({ ok: false, error: lastErr + hint });
+    }
+    res.json({ ok: true, bpfFilter, capturing: stillRunning, interfaces: pb.getCaptureDeviceNames().length,
+               warning: !stillRunning ? 'No matching capture device found' : undefined });
   } catch (err) { workerErr(res, err); }
 });
 

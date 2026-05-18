@@ -66,10 +66,12 @@ const activeCaptures = new Map(); // iface → { cap, buffer }
 // ── tcpdump fallback capture (no cap, no Python needed) ───────────────────────
 
 const activeTcpdump = new Map(); // iface → child_process
+let lastCaptureError = '';        // last stderr from tcpdump
 
 function startCaptureTcpdump(ifaceNames, filter, onPacket, onError) {
   const ifaces = ifaceNames.length ? ifaceNames : ['any'];
   let started  = 0;
+  lastCaptureError = '';
 
   for (const iface of ifaces) {
     if (activeTcpdump.has(iface)) continue;
@@ -78,7 +80,7 @@ function startCaptureTcpdump(ifaceNames, filter, onPacket, onError) {
     if (filter) args.push(filter);
 
     let proc;
-    try { proc = spawn('tcpdump', args, { stdio: ['ignore', 'pipe', 'ignore'] }); }
+    try { proc = spawn('tcpdump', args, { stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch { continue; }
 
     let pcapBuf    = Buffer.alloc(0);
@@ -120,7 +122,17 @@ function startCaptureTcpdump(ifaceNames, filter, onPacket, onError) {
       }
     });
 
-    proc.on('error', (err) => { try { onError && onError(err); } catch {} });
+    // Capture stderr so permission/device errors are surfaced
+    proc.stderr.on('data', (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) lastCaptureError = msg;
+      try { onError && onError(new Error(msg)); } catch {}
+    });
+
+    proc.on('error', (err) => {
+      lastCaptureError = err.message;
+      try { onError && onError(err); } catch {};
+    });
     proc.on('close', () => { activeTcpdump.delete(iface); });
 
     activeTcpdump.set(iface, proc);
@@ -128,6 +140,8 @@ function startCaptureTcpdump(ifaceNames, filter, onPacket, onError) {
   }
   return started > 0;
 }
+
+function getLastCaptureError() { return lastCaptureError; }
 
 function stopCaptureTcpdump() {
   for (const [, proc] of activeTcpdump) {
@@ -374,4 +388,5 @@ module.exports = {
   getCaptureDeviceNames, clearCapture, getCaptures, getCaptureStatus,
   addStreamCallback, removeStreamCallback,
   listInterfaces, resolveDevice, isAvailable, isTcpdumpAvailable, decodeFrame,
+  getLastCaptureError,
 };

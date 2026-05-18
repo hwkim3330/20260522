@@ -64,10 +64,13 @@ router.post('/start', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ interfaces }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(12000)  // extra time for the 350ms stabilize wait
     });
-    if (!resp.ok) throw new Error(`Peer returned HTTP ${resp.status}`);
-    const data = await resp.json();
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok === false) {
+      const errMsg = data.error || `Peer returned HTTP ${resp.status}`;
+      return res.status(resp.ok ? 502 : resp.status).json({ ok: false, error: errMsg });
+    }
     res.json({ ok: true, peerUrl: base, ...(data || {}) });
   } catch (err) { proxyErr(res, err); }
 });
