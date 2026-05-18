@@ -113,8 +113,8 @@ function setProfile(profile) {
   $('srcMac').value = '';
   $('srcIp').value  = '';
   autofillSenderFromPickedIface();
-  $('srcPort').value = profile.udp?.srcPort || 40000;
-  $('dstPort').value = profile.udp?.dstPort || 50000;
+  $('srcPort').value = profile.udp?.srcPort || profile.tcp?.srcPort || 40000;
+  $('dstPort').value = profile.udp?.dstPort || profile.tcp?.dstPort || 50000;
   $('payloadMode').value = payload.mode || 'text';
   $('payload').value = payload.data || payload.template || '';
   $('payloadSize').value = payload.size ?? '';
@@ -185,6 +185,9 @@ function getProfile() {
   if (protocol === 'udp') {
     profile.ipv4 = { src: $('srcIp').value.trim(), dst: $('dstIp').value.trim(), ttl: 64 };
     profile.udp = { srcPort: Number($('srcPort').value), dstPort: Number($('dstPort').value) };
+  } else if (protocol === 'tcp') {
+    profile.ipv4 = { src: $('srcIp').value.trim(), dst: $('dstIp').value.trim(), ttl: 64 };
+    profile.tcp = { srcPort: Number($('srcPort').value), dstPort: Number($('dstPort').value) };
   } else if (protocol === 'icmp') {
     profile.ipv4 = { src: $('srcIp').value.trim(), dst: $('dstIp').value.trim(), ttl: 64 };
     profile.icmp = { type: 8, code: 0, id: 8230, seq: 1 };
@@ -249,7 +252,11 @@ function packetInfo(decoded) {
   }
   if (decoded.ptp) return `${decoded.ptp.messageName} seq=${decoded.ptp.sequenceId} dom=${decoded.ptp.domain}`;
   if (decoded.arp) return decoded.arp.operation === 1 ? `Who has ${decoded.arp.targetIp}? Tell ${decoded.arp.senderIp}` : `${decoded.arp.senderIp} is at ${decoded.arp.senderMac}`;
-  if (decoded.tcp) return `${decoded.tcp.srcPort} → ${decoded.tcp.dstPort} [${(decoded.tcp.flags || []).join(',') || '-'}] seq=${decoded.tcp.seq} ack=${decoded.tcp.ack} win=${decoded.tcp.window}` + packetInfoExtra(decoded);
+  if (decoded.tcp) {
+    const f = decoded.tcp.flags || 0;
+    const flagNames = [[0x02,'SYN'],[0x10,'ACK'],[0x08,'PSH'],[0x01,'FIN'],[0x04,'RST'],[0x20,'URG']].filter(([b])=>f&b).map(([,n])=>n);
+    return `${decoded.tcp.srcPort} → ${decoded.tcp.dstPort} [${flagNames.join(',') || '-'}] seq=${decoded.tcp.seq} win=${decoded.tcp.window}` + packetInfoExtra(decoded);
+  }
   if (decoded.udp) return `${decoded.udp.srcPort} → ${decoded.udp.dstPort}  Len=${decoded.udp.length}` + packetInfoExtra(decoded);
   if (decoded.icmpv6) return `${decoded.icmpv6.typeName} (type ${decoded.icmpv6.type})`;
   if (decoded.icmp) return `type ${decoded.icmp.type}, seq ${decoded.icmp.seq}`;
