@@ -4964,122 +4964,133 @@ document.getElementById('counterReadBtn')?.addEventListener('click', async () =>
 });
 
 // =============================================================================
-// Capture Address — address-based live capture with PASS/FAIL evaluation
+// Capture Address — remote peer capture with PASS/FAIL evaluation
+// Fetch peer's captured packets via the Node.js proxy /api/remote-capture/*
 // =============================================================================
 
 const caState = {
-  packets: [],          // all captured packets (raw, unfiltered)
-  interfaces: [],       // interface objects from /api/interfaces
+  peerUrl: 'http://localhost:8080',
+  packets: [],          // all captured packets accumulated
+  ifaces: [],           // interface objects from peer probe
   selectedIfaces: [],   // interface keys currently checked
-  resolvedMac: '',      // MAC address resolved from caAddrInput
-  resolvedInput: '',    // raw text the user typed (for display)
   isCapturing: false,
   pollTimer: null,
-  lastPollCount: 0,     // number of packets seen on the last poll cycle
+  lastOffset: 0,        // number of packets fetched so far (for incremental poll)
   selectedIdx: -1,
+  targetAddr: '',       // raw text from caAddrInput (for PASS/FAIL)
+  displayFilter: '',    // current display filter string
 };
 
-// ─── Interface loader ─────────────────────────────────────────────────────────
-async function caRefreshIfaces() {
-  const listEl = $('caIfaceList');
-  if (!listEl) return;
-  listEl.textContent = 'loading…';
+// ─── Probe peer — GET peer's interfaces via server proxy ─────────────────────
+async function caProbe() {
+  const peerUrlEl = $('caPeerUrl');
+  const statusEl  = $('caPeerStatus');
+  const listEl    = $('caIfaceList');
+  const startBtn  = $('caStartBtn');
+  if (!peerUrlEl) return;
+
+  const peerUrl = peerUrlEl.value.trim() || 'http://localhost:8080';
+  caState.peerUrl = peerUrl;
+
+  if (statusEl) { statusEl.textContent = 'Probing…'; statusEl.className = 'caPeerStatus'; }
+  if (listEl)   listEl.textContent = 'loading…';
+  if (startBtn) startBtn.disabled = true;
+
   try {
-    const data = await api('/api/interfaces');
-    caState.interfaces = data.interfaces || [];
-    if (!caState.interfaces.length) {
-      listEl.textContent = '— no NICs found —';
+    const data = await api('/api/remote-capture/probe', {
+      method: 'POST',
+      body: JSON.stringify({ peerUrl })
+    });
+    caState.ifaces = data.interfaces || [];
+    if (!caState.ifaces.length) {
+      if (listEl) listEl.textContent = '— no NICs found on peer —';
+      if (statusEl) { statusEl.textContent = 'No NICs'; statusEl.className = 'caPeerStatus warn'; }
       return;
     }
-    // Auto-select first interface if nothing is selected yet
-    if (!caState.selectedIfaces.length && caState.interfaces.length) {
-      caState.selectedIfaces = [caState.interfaces[0].key || caState.interfaces[0].name];
+    // Auto-select first interface
+    if (!caState.selectedIfaces.length) {
+      caState.selectedIfaces = [caState.ifaces[0].key || caState.ifaces[0].name];
     }
-    listEl.innerHTML = '';
-    for (const iface of caState.interfaces) {
-      const key = iface.key || iface.name;
-      const label = iface.name || key;
-      const mac = iface.mac ? ` (${iface.mac})` : '';
-      const chip = document.createElement('label');
-      chip.className = 'caIfaceChip' + (caState.selectedIfaces.includes(key) ? ' selected' : '');
-      chip.title = iface.description || label;
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.value = key;
-      cb.checked = caState.selectedIfaces.includes(key);
-      cb.addEventListener('change', () => {
-        if (cb.checked) {
-          if (!caState.selectedIfaces.includes(key)) caState.selectedIfaces.push(key);
-        } else {
-          caState.selectedIfaces = caState.selectedIfaces.filter((k) => k !== key);
-        }
-        chip.classList.toggle('selected', cb.checked);
-      });
-      chip.appendChild(cb);
-      chip.append(` ${label}${mac}`);
-      listEl.appendChild(chip);
-    }
+    caRenderIfaceList();
+    if (statusEl) { statusEl.textContent = `OK — ${caState.ifaces.length} NIC(s)`; statusEl.className = 'caPeerStatus ok'; }
+    if (startBtn) startBtn.disabled = false;
   } catch (err) {
-    listEl.textContent = `Error: ${err.message}`;
+    if (listEl)   listEl.textContent = `Probe failed: ${err.message}`;
+    if (statusEl) { statusEl.textContent = `Error: ${err.message}`; statusEl.className = 'caPeerStatus fail'; }
   }
 }
 
-// ─── Address resolver ─────────────────────────────────────────────────────────
-async function caResolveAddress(text) {
-  const clean = (text || '').trim().toLowerCase();
-  if (!clean) return '';
-
-  // self / local / me  → MAC of first selected interface
-  if (['self', 'local', 'me'].includes(clean)) {
-    const selected = caState.selectedIfaces[0];
-    const iface = caState.interfaces.find((i) => (i.key || i.name) === selected);
-    if (iface?.mac) return iface.mac.toLowerCase();
-    // Fallback: ask server
-    try {
-      const res = await api('/api/local-addresses');
-      return res.addresses?.[0]?.address || '';
-    } catch { return ''; }
+// ─── Render peer interface checkboxes ─────────────────────────────────────────
+function caRenderIfaceList() {
+  const listEl   = $('caIfaceList');
+  const startBtn = $('caStartBtn');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  for (const iface of caState.ifaces) {
+    const key   = iface.key || iface.name;
+    const label = iface.name || key;
+    const mac   = iface.mac ? ` (${iface.mac})` : '';
+    const chip  = document.createElement('label');
+    chip.className = 'caIfaceChip' + (caState.selectedIfaces.includes(key) ? ' selected' : '');
+    chip.title = iface.description || label;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = key;
+    cb.checked = caState.selectedIfaces.includes(key);
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        if (!caState.selectedIfaces.includes(key)) caState.selectedIfaces.push(key);
+      } else {
+        caState.selectedIfaces = caState.selectedIfaces.filter((k) => k !== key);
+      }
+      chip.classList.toggle('selected', cb.checked);
+      if (startBtn) startBtn.disabled = caState.selectedIfaces.length === 0;
+    });
+    chip.appendChild(cb);
+    chip.append(` ${label}${mac}`);
+    listEl.appendChild(chip);
   }
-
-  // IPv4 address → ARP lookup
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(clean)) {
-    try {
-      const res = await api(`/api/arp-lookup?ip=${encodeURIComponent(clean)}`);
-      return res.mac || clean;
-    } catch { return clean; }
-  }
-
-  // MAC address → normalise separators to colons
-  if (/^([0-9a-f]{2}[:\-]){5}[0-9a-f]{2}$/i.test(clean)) {
-    return clean.replace(/-/g, ':');
-  }
-
-  // Anything else: treat as substring filter
-  return clean;
+  if (startBtn) startBtn.disabled = caState.selectedIfaces.length === 0;
 }
 
-// ─── Capture polling ──────────────────────────────────────────────────────────
-async function caPollPackets() {
+// ─── Capture polling — GET packets from peer via proxy ────────────────────────
+async function caPoll() {
   if (!caState.isCapturing) return;
   try {
-    const data = await api('/api/capture/packets?limit=2000');
-    const rows = data.rows || [];
-    // Only process new packets since last poll
-    if (rows.length > caState.lastPollCount) {
-      const newRows = rows.slice(caState.lastPollCount);
+    const params = new URLSearchParams({
+      peerUrl: caState.peerUrl,
+      limit:   500,
+      offset:  caState.lastOffset
+    });
+    const data = await api(`/api/remote-capture/packets?${params}`);
+    const newRows = data.rows || [];
+    if (newRows.length > 0) {
       for (const pkt of newRows) {
-        pkt._idx = caState.packets.length;
-        // Tag interface from packet data (worker may embed it)
-        if (!pkt._iface) pkt._iface = pkt.interface || pkt.iface || '';
+        pkt._idx   = caState.packets.length;
+        pkt._iface = pkt.interface || pkt.iface || '';
         caState.packets.push(pkt);
-        caRenderRow(pkt);
+        // Apply display filter before rendering
+        if (caPacketPassesFilter(pkt, caState.displayFilter)) {
+          caRenderRow(pkt);
+        }
       }
-      caState.lastPollCount = rows.length;
-      caEvaluateResult();
+      caState.lastOffset += newRows.length;
+      caUpdateCount();
     }
   } catch {
     // silently swallow polling errors
   }
+}
+
+// ─── Display filter helper ────────────────────────────────────────────────────
+function caPacketPassesFilter(pkt, filter) {
+  if (!filter) return true;
+  // Reuse the global frameMatchesFilter if available, otherwise do simple substring
+  if (typeof frameMatchesFilter === 'function') {
+    return frameMatchesFilter(pkt, filter);
+  }
+  const hay = JSON.stringify(pkt).toLowerCase();
+  return hay.includes(filter.toLowerCase());
 }
 
 // ─── Row renderer ─────────────────────────────────────────────────────────────
@@ -5090,103 +5101,106 @@ function caRenderRow(packet) {
   if (empty) empty.classList.add('hidden');
 
   const decoded = packet.decoded || {};
-  const eth = decoded.ethernet || decoded.eth || {};
-  const srcMac = eth.srcMac || eth.src || '-';
-  const dstMac = eth.dstMac || eth.dst || '-';
-  const srcIp = decoded.ipv4?.src || decoded.arp?.senderIp || decoded.ipv6?.src || '-';
-  const dstIp = decoded.ipv4?.dst || decoded.arp?.targetIp || decoded.ipv6?.dst || '-';
+  const eth     = decoded.ethernet || decoded.eth || {};
+  const srcMac  = eth.srcMac || eth.src || '-';
+  const dstMac  = eth.dstMac || eth.dst || '-';
+  const srcIp   = decoded.ipv4?.src || decoded.arp?.senderIp || decoded.ipv6?.src || '-';
+  const dstIp   = decoded.ipv4?.dst || decoded.arp?.targetIp || decoded.ipv6?.dst || '-';
   const t = packet.timestamp;
   const d = new Date(t * 1000);
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  const ms  = String(d.getMilliseconds()).padStart(3, '0');
   const tStr = `${d.toLocaleTimeString('en-GB')}.${ms}`;
   const proto = protocolName(decoded);
-  const info = packetInfo(decoded);
-  const idx = packet._idx;
+  const info  = packetInfo(decoded);
+  const idx   = packet._idx;
   const iface = packet._iface || '';
 
   const tr = document.createElement('tr');
   tr.dataset.idx = String(idx);
-  tr.className = rowProtoClass(decoded);
+  tr.className   = rowProtoClass(decoded);
 
-  // Highlight rows that match the resolved MAC/IP
-  if (caState.resolvedMac && caPacketMatchesMac(packet, caState.resolvedMac)) {
+  // Highlight rows matching target address
+  if (caState.targetAddr && caPacketMatchesTarget(packet, caState.targetAddr)) {
     tr.classList.add('ca-match');
   }
 
   tr.innerHTML = `<td class="colNum">${idx + 1}</td><td class="colTime">${tStr}</td><td class="colIface">${iface}</td><td class="colSrcMac">${srcMac}</td><td class="colDstMac">${dstMac}</td><td class="colSrc">${srcIp}</td><td class="colDst">${dstIp}</td><td class="colProto">${proto}</td><td class="colLen">${packet.length || 0}</td><td>${info}</td>`;
-
   tbody.appendChild(tr);
 }
 
-// ─── MAC / IP match helper ────────────────────────────────────────────────────
-function caPacketMatchesMac(packet, mac) {
-  if (!mac) return false;
-  const m = mac.toLowerCase();
+// ─── Packet count display ─────────────────────────────────────────────────────
+function caUpdateCount() {
+  const el = $('caPacketCount');
+  if (el) el.textContent = `${caState.packets.length} packet${caState.packets.length !== 1 ? 's' : ''}`;
+}
+
+// ─── Target address matcher ───────────────────────────────────────────────────
+function caPacketMatchesTarget(packet, addr) {
+  if (!addr) return false;
+  const a = addr.toLowerCase().trim();
   const d = packet.decoded || {};
   const eth = d.ethernet || d.eth || {};
   const srcMac = (eth.srcMac || eth.src || '').toLowerCase();
   const dstMac = (eth.dstMac || eth.dst || '').toLowerCase();
-  // If mac looks like an IP, check IP fields too
-  if (/^\d{1,3}\.\d{1,3}/.test(m)) {
-    const srcIp = (d.ipv4?.src || d.arp?.senderIp || '').toLowerCase();
-    const dstIp = (d.ipv4?.dst || d.arp?.targetIp || '').toLowerCase();
-    return srcIp.includes(m) || dstIp.includes(m);
+  // IP match
+  if (/^\d{1,3}\.\d{1,3}/.test(a)) {
+    const srcIp = (d.ipv4?.src || d.arp?.senderIp || d.ipv6?.src || '').toLowerCase();
+    const dstIp = (d.ipv4?.dst || d.arp?.targetIp || d.ipv6?.dst || '').toLowerCase();
+    return srcIp.includes(a) || dstIp.includes(a);
   }
-  return srcMac.includes(m) || dstMac.includes(m);
+  // MAC match
+  return srcMac.includes(a) || dstMac.includes(a);
 }
 
-// ─── PASS/FAIL evaluation ─────────────────────────────────────────────────────
-function caEvaluateResult() {
-  const mac = caState.resolvedMac;
-  if (!mac) return;
-  const resultEl = $('caResult');
-  if (!resultEl) return;
-  resultEl.classList.remove('hidden', 'pass', 'fail');
+// ─── PASS/FAIL check ─────────────────────────────────────────────────────────
+function caCheck() {
+  const addrInput = $('caAddrInput');
+  const resultEl  = $('caResult');
+  if (!addrInput || !resultEl) return;
 
-  const [txIface, ...rxIfaceKeys] = caState.selectedIfaces;
+  const addr = (addrInput.value || '').trim();
+  caState.targetAddr = addr;
 
-  // Find packets whose Src or Dst MAC/IP matches the resolved value
-  const matches = caState.packets.filter((p) => caPacketMatchesMac(p, mac));
-
-  // RX: packets on non-TX interfaces (or all interfaces if only one selected)
-  const rxHits = matches.filter((p) => {
-    if (rxIfaceKeys.length === 0) return true; // single iface mode: any hit counts
-    return rxIfaceKeys.some((r) => (p._iface || '').includes(r));
+  // Re-highlight all rows
+  document.querySelectorAll('#caRows tr').forEach((tr) => {
+    const idx = Number(tr.dataset.idx);
+    const pkt = caState.packets[idx];
+    if (pkt) tr.classList.toggle('ca-match', addr ? caPacketMatchesTarget(pkt, addr) : false);
   });
 
-  const verdict = rxHits.length > 0 ? 'PASS' : 'FAIL';
-  resultEl.classList.add(verdict.toLowerCase());
-  const addrLabel = caState.resolvedInput || mac;
-  resultEl.textContent = `${verdict}  —  Address: ${addrLabel}  |  Resolved: ${mac}  |  Total matches: ${matches.length}  |  RX hits: ${rxHits.length}`;
+  if (!addr) {
+    resultEl.textContent = '';
+    resultEl.className   = 'caResult';
+    return;
+  }
 
-  // Update meta spans
-  const txEl = $('caTxIface'); if (txEl) txEl.textContent = txIface || '—';
-  const rxEl = $('caRxIface'); if (rxEl) rxEl.textContent = rxIfaceKeys.join(', ') || txIface || '—';
+  const matches = caState.packets.filter((p) => caPacketMatchesTarget(p, addr));
+  const verdict = matches.length > 0 ? 'PASS' : 'FAIL';
+  resultEl.className   = `caResult ${verdict.toLowerCase()}`;
+  resultEl.textContent = `${verdict}  —  Target: ${addr}  |  Matched: ${matches.length} packet(s)`;
 }
 
-// ─── Start capture ────────────────────────────────────────────────────────────
+// ─── Start capture on peer ────────────────────────────────────────────────────
 async function caStartCapture() {
   if (caState.isCapturing) return;
   if (!caState.selectedIfaces.length) { toast('No interface selected', 'warn'); return; }
 
-  // Clear existing data
-  caState.packets = [];
-  caState.lastPollCount = 0;
+  // Reset local state
+  caState.packets    = [];
+  caState.lastOffset = 0;
   caState.selectedIdx = -1;
-  const tbody = $('caRows');
-  if (tbody) tbody.innerHTML = '';
+  caState.targetAddr  = '';
+  const tbody = $('caRows'); if (tbody) tbody.innerHTML = '';
   const empty = $('caPacketEmpty');
-  if (empty) { empty.classList.remove('hidden'); empty.textContent = 'Capturing…'; }
-  const det = $('caDetailPane'); if (det) det.hidden = true;
-  const res = $('caResult'); if (res) res.classList.add('hidden');
+  if (empty) { empty.classList.remove('hidden'); empty.textContent = 'Capturing from peer…'; }
+  const det = $('caDetailPane'); if (det) det.classList.add('hidden');
+  const res = $('caResult'); if (res) { res.textContent = ''; res.className = 'caResult'; }
+  caUpdateCount();
 
   try {
-    // Clear server-side buffer
-    await api('/api/capture/clear', { method: 'POST', body: JSON.stringify({}) });
-    // Start capture on selected interfaces
-    await api('/api/capture/start', {
+    await api('/api/remote-capture/start', {
       method: 'POST',
-      body: JSON.stringify({ interfaces: caState.selectedIfaces })
+      body: JSON.stringify({ peerUrl: caState.peerUrl, interfaces: caState.selectedIfaces })
     });
   } catch (err) {
     toast(`Capture start failed: ${err.message}`, 'fail');
@@ -5194,112 +5208,102 @@ async function caStartCapture() {
   }
 
   caState.isCapturing = true;
-  $('caStartBtn').disabled = true;
-  $('caStopBtn').disabled = false;
-  $('caStartBtn').textContent = '● Capturing';
+  const startBtn = $('caStartBtn');
+  const stopBtn  = $('caStopBtn');
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = '● Capturing'; }
+  if (stopBtn)  stopBtn.disabled = false;
 
-  // Poll every 500 ms
-  caState.pollTimer = setInterval(caPollPackets, 500);
+  caState.pollTimer = setInterval(caPoll, 500);
 }
 
-// ─── Stop capture ─────────────────────────────────────────────────────────────
+// ─── Stop capture on peer ─────────────────────────────────────────────────────
 async function caStopCapture() {
   if (!caState.isCapturing) return;
   caState.isCapturing = false;
   clearInterval(caState.pollTimer);
   caState.pollTimer = null;
+
   try {
-    await api('/api/capture/stop', { method: 'POST', body: JSON.stringify({}) });
+    await api('/api/remote-capture/stop', {
+      method: 'POST',
+      body: JSON.stringify({ peerUrl: caState.peerUrl })
+    });
   } catch { /* ignore */ }
-  // One final poll to capture any trailing packets
-  await caPollPackets();
-  $('caStartBtn').disabled = false;
-  $('caStopBtn').disabled = true;
-  $('caStartBtn').textContent = '▶ Start';
+
+  // One final poll
+  await caPoll();
+
+  const startBtn = $('caStartBtn');
+  const stopBtn  = $('caStopBtn');
+  if (startBtn) { startBtn.disabled = false; startBtn.textContent = '▶ Start Capture'; }
+  if (stopBtn)  stopBtn.disabled = true;
+
   const empty = $('caPacketEmpty');
   if (empty && caState.packets.length === 0) {
     empty.classList.remove('hidden');
-    empty.textContent = 'No packets captured.';
+    empty.textContent = 'No packets captured from peer.';
   }
+  caUpdateCount();
 }
 
 // ─── Clear ────────────────────────────────────────────────────────────────────
 async function caClear() {
   await caStopCapture();
-  caState.packets = [];
-  caState.lastPollCount = 0;
+  caState.packets    = [];
+  caState.lastOffset = 0;
   caState.selectedIdx = -1;
+  caState.targetAddr  = '';
   const tbody = $('caRows'); if (tbody) tbody.innerHTML = '';
-  const res = $('caResult'); if (res) res.classList.add('hidden');
-  const det = $('caDetailPane'); if (det) det.hidden = true;
+  const res   = $('caResult'); if (res) { res.textContent = ''; res.className = 'caResult'; }
+  const det   = $('caDetailPane'); if (det) det.classList.add('hidden');
   const empty = $('caPacketEmpty');
-  if (empty) { empty.classList.remove('hidden'); empty.textContent = 'No packets yet — pick an interface, enter an address, and press Start.'; }
+  if (empty) { empty.classList.remove('hidden'); empty.textContent = 'Probe the peer, select an interface, then press Start Capture.'; }
+  const addrIn = $('caAddrInput'); if (addrIn) addrIn.value = '';
+  caUpdateCount();
+
+  try {
+    await api('/api/remote-capture/clear', {
+      method: 'POST',
+      body: JSON.stringify({ peerUrl: caState.peerUrl })
+    });
+  } catch { /* ignore */ }
 }
 
-// ─── Wire up event listeners once DOM is ready ────────────────────────────────
+// ─── Wire up event listeners ──────────────────────────────────────────────────
 (function initCaptureAddress() {
-  const refreshBtn = $('caRefreshBtn');
+  const probeBtn   = $('caProbeBtn');
   const startBtn   = $('caStartBtn');
   const stopBtn    = $('caStopBtn');
   const clearBtn   = $('caClearBtn');
-  const loadBtn    = $('caLoadBtn');
-  const clearAddr  = $('caClearAddrBtn');
+  const checkBtn   = $('caCheckBtn');
   const addrInput  = $('caAddrInput');
-  const resolvedEl = $('caResolved');
+  const filterInput = $('caDisplayFilter');
   const tbody      = $('caRows');
 
-  if (!startBtn) return; // view not in DOM yet
+  if (!startBtn) return; // view not in DOM
 
-  refreshBtn?.addEventListener('click', caRefreshIfaces);
+  probeBtn?.addEventListener('click', caProbe);
   startBtn.addEventListener('click', caStartCapture);
   stopBtn.addEventListener('click', caStopCapture);
   clearBtn.addEventListener('click', caClear);
+  checkBtn?.addEventListener('click', caCheck);
 
-  // Load / resolve address
-  loadBtn?.addEventListener('click', async () => {
-    const text = addrInput?.value || '';
-    if (!text.trim()) { toast('Enter an address', 'warn'); return; }
-    loadBtn.disabled = true;
-    loadBtn.textContent = '…';
-    try {
-      const mac = await caResolveAddress(text);
-      caState.resolvedMac = mac;
-      caState.resolvedInput = text;
-      if (resolvedEl) resolvedEl.textContent = mac || '—';
-      toast(`Resolved: ${mac || '(none)'}`, mac ? 'ok' : 'warn');
-      // Re-evaluate + re-highlight existing rows
-      if (caState.packets.length) {
-        // Re-paint match highlights without re-rendering everything
-        document.querySelectorAll('#caRows tr').forEach((tr) => {
-          const idx = Number(tr.dataset.idx);
-          const pkt = caState.packets[idx];
-          if (pkt) tr.classList.toggle('ca-match', caPacketMatchesMac(pkt, mac));
-        });
-        caEvaluateResult();
-      }
-    } catch (err) {
-      toast(`Resolve failed: ${err.message}`, 'fail');
-    } finally {
-      loadBtn.disabled = false;
-      loadBtn.textContent = 'Load';
-    }
-  });
-
-  // Clear address
-  clearAddr?.addEventListener('click', () => {
-    if (addrInput) addrInput.value = '';
-    caState.resolvedMac = '';
-    caState.resolvedInput = '';
-    if (resolvedEl) resolvedEl.textContent = '—';
-    const txEl = $('caTxIface'); if (txEl) txEl.textContent = '—';
-    const rxEl = $('caRxIface'); if (rxEl) rxEl.textContent = '—';
-    const res = $('caResult'); if (res) res.classList.add('hidden');
-    document.querySelectorAll('#caRows tr').forEach((tr) => tr.classList.remove('ca-match'));
-  });
-
-  // Enter key in address input triggers Load
+  // Enter in address input → check
   addrInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') loadBtn?.click();
+    if (e.key === 'Enter') caCheck();
+  });
+
+  // Display filter
+  filterInput?.addEventListener('input', () => {
+    caState.displayFilter = filterInput.value.trim();
+    // Re-render visible rows according to filter
+    const allRows = document.querySelectorAll('#caRows tr');
+    allRows.forEach((tr) => {
+      const idx = Number(tr.dataset.idx);
+      const pkt = caState.packets[idx];
+      if (!pkt) return;
+      tr.style.display = caPacketPassesFilter(pkt, caState.displayFilter) ? '' : 'none';
+    });
   });
 
   // Row click → show detail
@@ -5314,14 +5318,17 @@ async function caClear() {
     const det = $('caDetailPane');
     const pre = $('caDetailText');
     if (det && pre) {
-      pre.textContent = JSON.stringify(pkt.decoded || pkt, null, 2);
-      det.hidden = false;
+      det.classList.remove('hidden');
+      let detail = '';
+      if (pkt.decoded) detail += JSON.stringify(pkt.decoded, null, 2);
+      if (pkt.frameHex) detail += '\n\n' + pkt.frameHex.match(/.{1,32}/g)?.join('\n') || pkt.frameHex;
+      pre.textContent = detail || JSON.stringify(pkt, null, 2);
     }
   });
 
-  // Load interfaces when this tab is activated
+  // Auto-probe localhost when tab is first activated
   document.querySelector('[data-view="captureAddressView"]')?.addEventListener('click', () => {
-    if (!caState.interfaces.length) caRefreshIfaces();
+    if (!caState.ifaces.length) caProbe();
   });
 })();
 

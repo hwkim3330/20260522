@@ -151,6 +151,7 @@ app.get('/api/csharp/health', (req, res) => {
 });
 
 // ── routes ───────────────────────────────────────────────────────────────────
+app.use('/api/remote-capture', require('./routes/remoteCapture'));
 app.use('/api', require('./routes/health'));
 app.use('/api', require('./routes/packet'));
 app.use('/api', require('./routes/capture'));

@@ -3474,6 +3474,7 @@ body:not(.controlMode) .linkStrip { display: none; }
 
 #captureAddressView.roleView {
   grid-template-columns: 1fr;
+  /* peerBar | ifaceBar | addrRow | packetWrap | detailPane */
   grid-template-rows: auto auto auto 1fr auto;
   height: 100%;
   overflow: hidden;
@@ -3486,7 +3487,60 @@ body:not(.controlMode) .linkStrip { display: none; }
   display: grid;
 }
 
-/* Top bar: NIC checkboxes + control buttons */
+/* ── Peer URL bar ─────────────────────────────────────────────────────────── */
+.caPeerBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.caPeerLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.caPeerInput {
+  flex: 1 1 260px;
+  min-width: 200px;
+  max-width: 360px;
+  padding: 5px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.caPeerStatus {
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.caPeerStatus.ok   { color: #1f7a4d; }
+.caPeerStatus.warn { color: #b45309; }
+.caPeerStatus.fail { color: #b91c1c; }
+
+/* ── Interface bar ────────────────────────────────────────────────────────── */
+.caIfaceBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+/* (kept for backward compat) */
 .caTopBar {
   display: flex;
   align-items: center;
@@ -3556,6 +3610,17 @@ body:not(.controlMode) .linkStrip { display: none; }
   flex-wrap: wrap;
 }
 
+.caAddrLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
 .caAddrInputEl {
   flex: 1 1 260px;
   min-width: 200px;
@@ -3563,6 +3628,31 @@ body:not(.controlMode) .linkStrip { display: none; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   border-radius: 7px;
+}
+
+/* Packet wrap + table header + display filter */
+.caPacketWrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.caTableHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.caDisplayFilter {
+  flex: 1;
+  max-width: 480px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border-radius: 6px;
 }
 
 .caMeta {
@@ -3587,8 +3677,10 @@ body:not(.controlMode) .linkStrip { display: none; }
   border-radius: 7px;
   font-weight: 600;
   font-size: 13px;
+  flex-shrink: 0;
 }
 
+.caResult:empty { display: none; }
 .caResult.hidden { display: none; }
 
 .caResult.pass {
@@ -3663,6 +3755,8 @@ body:not(.controlMode) .linkStrip { display: none; }
   border-radius: 8px;
   min-height: 0;
 }
+
+.caDetailPane.hidden { display: none; }
 
 .caDetailPre {
   margin: 0;

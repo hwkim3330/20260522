@@ -339,54 +339,65 @@
 
         <!-- ── Capture Address View ─────────────────────────────────── -->
         <section id="captureAddressView" class="roleView">
-          <!-- Interface selection + capture controls -->
-          <div class="caTopBar">
-            <div class="caIfaceList" id="caIfaceList">— loading NICs —</div>
+
+          <!-- Row 0: Peer URL bar -->
+          <div class="caPeerBar">
+            <label class="caPeerLabel">Peer URL
+              <input id="caPeerUrl" class="caPeerInput" value="http://localhost:8080" autocomplete="off" spellcheck="false">
+            </label>
+            <button id="caProbeBtn" class="primaryAction" style="min-height:34px;padding:0 16px;">Probe</button>
+            <span id="caPeerStatus" class="caPeerStatus"></span>
+          </div>
+
+          <!-- Row 1: Interface chips + capture controls -->
+          <div class="caIfaceBar">
+            <div id="caIfaceList" class="caIfaceList">← Probe peer first</div>
             <div class="caControls">
-              <button id="caRefreshBtn" class="ghostBtn small" title="Reload NIC list">↻ NICs</button>
-              <button id="caStartBtn" class="primaryAction wsStart">▶ Start</button>
+              <button id="caStartBtn" class="primaryAction wsStart" disabled>▶ Start Capture</button>
               <button id="caStopBtn" class="ghostBtn wsStop" disabled>■ Stop</button>
               <button id="caClearBtn" class="ghostBtn">Clear</button>
             </div>
           </div>
 
-          <!-- Address input row -->
+          <!-- Row 2: Target address + PASS/FAIL check -->
           <div class="caAddrRow">
-            <input id="caAddrInput" class="caAddrInputEl" placeholder="self / local / 192.168.1.1 / AA:BB:CC:DD:EE:FF" autocomplete="off">
-            <button id="caLoadBtn" class="primaryAction" style="min-height:34px;padding:0 14px;font-size:.82rem;">Load</button>
-            <button id="caClearAddrBtn" class="ghostBtn" style="min-height:34px;padding:0 10px;font-size:.82rem;">Clear</button>
-            <span class="caMeta">Resolved: <code id="caResolved">—</code></span>
-            <span class="caMeta">TX: <code id="caTxIface">—</code></span>
-            <span class="caMeta">RX: <code id="caRxIface">—</code></span>
+            <label class="caAddrLabel">Target Address
+              <input id="caAddrInput" class="caAddrInputEl" placeholder="self / 192.168.1.1 / AA:BB:CC:DD:EE:FF" autocomplete="off">
+            </label>
+            <button id="caCheckBtn" class="ghostBtn" style="min-height:34px;padding:0 14px;font-size:.82rem;">Check</button>
+            <span id="caResult" class="caResult"></span>
           </div>
 
-          <!-- PASS/FAIL result badge -->
-          <div id="caResult" class="caResult hidden"></div>
-
-          <!-- Packet table -->
-          <div class="caPacketList" id="caPacketList">
-            <table>
-              <thead>
-                <tr>
-                  <th class="colNum">#</th>
-                  <th class="colTime">Time</th>
-                  <th class="colIface">Interface</th>
-                  <th class="colSrcMac">Src MAC</th>
-                  <th class="colDstMac">Dst MAC</th>
-                  <th class="colSrc">Source</th>
-                  <th class="colDst">Destination</th>
-                  <th class="colProto">Protocol</th>
-                  <th class="colLen">Len</th>
-                  <th>Info</th>
-                </tr>
-              </thead>
-              <tbody id="caRows"></tbody>
-            </table>
-            <div id="caPacketEmpty" class="empty wsEmpty">No packets yet — pick an interface, enter an address, and press <strong>Start</strong>.</div>
+          <!-- Row 3: Packet table header -->
+          <div class="caPacketWrap">
+            <div class="caTableHeader">
+              <span id="caPacketCount" class="muted">0 packets</span>
+              <input id="caDisplayFilter" class="caDisplayFilter" placeholder="display filter: mac: / ip: / tcp / udp…" autocomplete="off">
+            </div>
+            <div class="caPacketList" id="caPacketList">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="colNum">#</th>
+                    <th class="colTime">Time</th>
+                    <th class="colIface">Interface</th>
+                    <th class="colSrcMac">Src MAC</th>
+                    <th class="colDstMac">Dst MAC</th>
+                    <th class="colSrc">Source</th>
+                    <th class="colDst">Destination</th>
+                    <th class="colProto">Protocol</th>
+                    <th class="colLen">Len</th>
+                    <th>Info</th>
+                  </tr>
+                </thead>
+                <tbody id="caRows"></tbody>
+              </table>
+              <div id="caPacketEmpty" class="empty wsEmpty">Probe the peer, select an interface, then press <strong>Start Capture</strong>.</div>
+            </div>
           </div>
 
-          <!-- Selected packet detail -->
-          <div class="caDetailPane" id="caDetailPane" hidden>
+          <!-- Row 4: Selected packet detail -->
+          <div class="caDetailPane hidden" id="caDetailPane">
             <pre id="caDetailText" class="caDetailPre"></pre>
           </div>
         </section>

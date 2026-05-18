@@ -1,48 +1,89 @@
 using System.Collections.ObjectModel;
-using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows.Input;
+using System.Windows.Threading;
 using EthernetPacketGenerator.Commands;
 using EthernetPacketGenerator.Models;
-using EthernetPacketGenerator.Services;
-using Microsoft.Win32;
 
 namespace EthernetPacketGenerator.ViewModels;
 
-public sealed class NdjsonPreviewRow : ViewModelBase
+/// <summary>
+/// Represents a single interface item returned by the peer probe.
+/// </summary>
+public sealed class RemoteInterfaceItem : ViewModelBase
 {
-    public int LineNumber { get; init; }
-    public string State { get; init; } = "";
-    public string Name { get; init; } = "";
-    public string InterfaceName { get; init; } = "";
-    public int Length { get; init; }
-    public int RepeatCount { get; init; }
-    public int IntervalMs { get; init; }
-    public string Summary { get; init; } = "";
-    public string Error { get; init; } = "";
-    public PacketItem? Packet { get; init; }
+    private bool _isSelected;
+
+    public string Key         { get; init; } = "";
+    public string Name        { get; init; } = "";
+    public string Mac         { get; init; } = "";
+    public string State       { get; init; } = "";
+    public string Description { get; init; } = "";
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetProperty(ref _isSelected, value);
+    }
+
+    public string DisplayName => string.IsNullOrWhiteSpace(Description)
+        ? Name
+        : $"{Name}  —  {Description}";
 }
 
-public sealed class NdjsonBridgeViewModel : ViewModelBase
+/// <summary>
+/// Remote-capture row shown in the DataGrid.
+/// Populated from peer's /api/capture/packets response.
+/// </summary>
+public sealed class RemoteCaptureRow
 {
-    private readonly NdjsonPacketImportService _importService = new();
-    private readonly PacketListViewModel _packetList;
-    private readonly SendViewModel _send;
-    private readonly CaptureViewModel _capture;
-    private readonly TestCaseManagerViewModel _testCases;
-    private string _ndjsonText = "";
-    private string _addressText = "self";
-    private string _resolvedAddress = "";
-    private string _resultText = "Result: not checked";
-    private string _txInterfaceName = "";
-    private string _rxInterfaceNames = "";
-    private string _status = "Enter self/local or a peer MAC address, then load capture data.";
+    public int    No            { get; init; }
+    public string Time          { get; init; } = "";
+    public string InterfaceName { get; init; } = "";
+    public string SrcMac        { get; init; } = "";
+    public string DstMac        { get; init; } = "";
+    public string Source        { get; init; } = "";
+    public string Destination   { get; init; } = "";
+    public string Protocol      { get; init; } = "";
+    public int    Length        { get; init; }
+    public string Info          { get; init; } = "";
+    public string DetailJson    { get; init; } = "";
+    public bool   IsMatch       { get; set; }   // matches target address
+}
 
-    public ObservableCollection<NdjsonPreviewRow> Rows { get; } = new();
-
-    public string NdjsonText
+/// <summary>
+/// ViewModel for the "Capture Address" tab.
+/// Probes a remote peer's interfaces, starts/stops capture there,
+/// polls packets through the Node.js proxy, and evaluates PASS/FAIL.
+/// </summary>
+public sealed class NdjsonBridgeViewModel : ViewModelBase, IDisposable
+{
+    // ── HTTP client (shared, long-lived) ──────────────────────────────────────
+    private static readonly HttpClient _http = new HttpClient
     {
-        get => _ndjsonText;
-        set => SetProperty(ref _ndjsonText, value);
+        Timeout = TimeSpan.FromSeconds(10)
+    };
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private string            _peerUrl        = "http://localhost:8080";
+    private string            _proxyBase      = "http://localhost:8080"; // local Node.js server
+    private string            _status         = "Enter peer URL and press Probe.";
+    private string            _targetAddress  = "";
+    private string            _resultText     = "";
+    private bool              _isCapturing    = false;
+    private int               _lastOffset     = 0;
+    private RemoteCaptureRow? _selectedPacket = null;
+
+    private DispatcherTimer? _pollTimer;
+
+    // ── Public bindable properties ────────────────────────────────────────────
+    public string PeerUrl
+    {
+        get => _peerUrl;
+        set => SetProperty(ref _peerUrl, value);
     }
 
     public string Status
@@ -51,16 +92,10 @@ public sealed class NdjsonBridgeViewModel : ViewModelBase
         private set => SetProperty(ref _status, value);
     }
 
-    public string AddressText
+    public string TargetAddress
     {
-        get => _addressText;
-        set => SetProperty(ref _addressText, value);
-    }
-
-    public string ResolvedAddress
-    {
-        get => _resolvedAddress;
-        private set => SetProperty(ref _resolvedAddress, value);
+        get => _targetAddress;
+        set => SetProperty(ref _targetAddress, value);
     }
 
     public string ResultText
@@ -69,405 +104,335 @@ public sealed class NdjsonBridgeViewModel : ViewModelBase
         private set => SetProperty(ref _resultText, value);
     }
 
-    public string TxInterfaceName
+    public bool IsCapturing
     {
-        get => _txInterfaceName;
-        private set => SetProperty(ref _txInterfaceName, value);
-    }
-
-    public string RxInterfaceNames
-    {
-        get => _rxInterfaceNames;
-        private set => SetProperty(ref _rxInterfaceNames, value);
-    }
-
-    public int ValidCount => Rows.Count(r => r.Packet != null);
-    public int ErrorCount => Rows.Count(r => r.Packet == null);
-    public CaptureViewModel Capture => _capture;
-    public TestCaseManagerViewModel TestCases => _testCases;
-
-    public ICommand OpenFileCommand { get; }
-    public ICommand ParseCommand { get; }
-    public ICommand ApplyCaptureAddressCommand { get; }
-    public ICommand ClearCaptureAddressCommand { get; }
-    public ICommand ReplaceSendListCommand { get; }
-    public ICommand AppendSendListCommand { get; }
-    public ICommand ClearCommand { get; }
-    public ICommand SendListCommand => _send.SendListCommand;
-    public ICommand StartCaptureCommand => _capture.StartCommand;
-    public ICommand StopCaptureCommand => _capture.StopCommand;
-    public ICommand ClearCaptureCommand => _capture.ClearCommand;
-    public ICommand RefreshCaptureInterfacesCommand => _capture.RefreshInterfacesCommand;
-    public ICommand ValidateCaptureCommand => _testCases.ValidateCaptureCommand;
-    public ICommand ApplyScenarioSheetCommand => _testCases.ApplyScenarioSheetCommand;
-
-    public NdjsonBridgeViewModel(
-        PacketListViewModel packetList,
-        SendViewModel send,
-        CaptureViewModel capture,
-        TestCaseManagerViewModel testCases)
-    {
-        _packetList = packetList;
-        _send = send;
-        _capture = capture;
-        _testCases = testCases;
-
-        OpenFileCommand = new RelayCommand(OpenFile);
-        ParseCommand = new RelayCommand(Parse);
-        ApplyCaptureAddressCommand = new RelayCommand(ApplyCaptureAddress);
-        ClearCaptureAddressCommand = new RelayCommand(ClearCaptureAddress);
-        ReplaceSendListCommand = new RelayCommand(() => LoadIntoPacketList(replace: true), () => ValidCount > 0);
-        AppendSendListCommand = new RelayCommand(() => LoadIntoPacketList(replace: false), () => ValidCount > 0);
-        ClearCommand = new RelayCommand(Clear);
-        ApplyCaptureAddress();
-    }
-
-    private void ApplyCaptureAddress()
-    {
-        var clean = (AddressText ?? "").Trim();
-        UpdateTxRxSummary();
-
-        // IP address → apply ip: filter directly
-        if (System.Net.IPAddress.TryParse(clean, out var ip) &&
-            !clean.Equals("self", StringComparison.OrdinalIgnoreCase) &&
-            !clean.Equals("local", StringComparison.OrdinalIgnoreCase))
+        get => _isCapturing;
+        private set
         {
-            ResolvedAddress = ip.ToString();
-            _capture.DisplayFilter = $"ip:{ip}";
-            EvaluateCaptureResultByIp(ip.ToString());
-            return;
-        }
-
-        var mac = ResolveAddress(clean);
-        ResolvedAddress = mac;
-
-        if (string.IsNullOrWhiteSpace(mac) || mac == "00:00:00:00:00:00")
-        {
-            _capture.DisplayFilter = string.Empty;
-            ResultText = "Result: FAIL - no address";
-            Status = "No capture address resolved. Select a capture NIC or enter a peer MAC address.";
-            return;
-        }
-
-        _capture.DisplayFilter = $"mac:{mac.ToLowerInvariant()}";
-        EvaluateCaptureResult(mac);
-    }
-
-    private void EvaluateCaptureResultByIp(string ip)
-    {
-        var packets = _capture.GetPacketsSnapshot(5000);
-        var matches = packets
-            .Where(p => p.Source.Contains(ip, StringComparison.OrdinalIgnoreCase) ||
-                        p.Destination.Contains(ip, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (matches.Count > 0)
-        {
-            ResultText = $"Result: PASS - {matches.Count} packet(s) matched IP {ip}";
-            Status = $"PASS. {matches.Count} packet(s) contain IP {ip} as source or destination.";
-        }
-        else
-        {
-            ResultText = $"Result: FAIL - no packets matched IP {ip}";
-            Status = $"FAIL. No captured packets contain IP {ip}. Make sure capture is running.";
+            SetProperty(ref _isCapturing, value);
+            System.Windows.Application.Current?.Dispatcher.InvokeAsync(
+                System.Windows.Input.CommandManager.InvalidateRequerySuggested,
+                DispatcherPriority.Background);
         }
     }
 
-    private void ClearCaptureAddress()
+    public RemoteCaptureRow? SelectedPacket
     {
-        AddressText = "";
-        ResolvedAddress = "";
-        ResultText = "Result: not checked";
-        TxInterfaceName = "";
-        RxInterfaceNames = "";
-        _capture.DisplayFilter = string.Empty;
-        Status = "Capture address filter cleared.";
+        get => _selectedPacket;
+        set
+        {
+            if (SetProperty(ref _selectedPacket, value))
+                OnPropertyChanged(nameof(SelectedDetailText));
+        }
     }
 
-    private string ResolveAddress(string? value)
+    public string SelectedDetailText =>
+        _selectedPacket?.DetailJson ?? "Select a packet row to inspect decoded fields.";
+
+    // ── Collections ───────────────────────────────────────────────────────────
+    public ObservableCollection<RemoteInterfaceItem> PeerInterfaces { get; } = new();
+    public ObservableCollection<RemoteCaptureRow>    Packets        { get; } = new();
+
+    // ── Commands ──────────────────────────────────────────────────────────────
+    public ICommand ProbeCommand   { get; }
+    public ICommand StartCommand   { get; }
+    public ICommand StopCommand    { get; }
+    public ICommand ClearCommand   { get; }
+    public ICommand CheckCommand   { get; }
+
+    // ── Constructor ───────────────────────────────────────────────────────────
+    public NdjsonBridgeViewModel()
     {
-        var clean = (value ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(clean) ||
-            clean.Equals("self", StringComparison.OrdinalIgnoreCase) ||
-            clean.Equals("local", StringComparison.OrdinalIgnoreCase) ||
-            clean.Equals("me", StringComparison.OrdinalIgnoreCase))
-        {
-            return GetDefaultRxMac() ?? GetSelectedCaptureMac() ?? "00:00:00:00:00:00";
-        }
+        // Determine the local proxy base (Node.js server).
+        // Defaults to localhost:8080 — same as peerUrl initial value.
+        _proxyBase = "http://localhost:8080";
 
-        // IP address → resolve to MAC
-        if (System.Net.IPAddress.TryParse(clean, out var ip))
-        {
-            // Check if it's one of our own local IPs
-            var localMac = GetLocalMacForIp(ip);
-            if (localMac != null) return localMac;
+        ProbeCommand = new RelayCommand(
+            async () => await ProbeAsync(),
+            () => !IsCapturing);
 
-            // Try ARP table lookup for remote IPs
-            var arpMac = ResolveIpToMacViaArp(ip);
-            if (arpMac != null) return arpMac;
+        StartCommand = new RelayCommand(
+            async () => await StartCaptureAsync(),
+            () => !IsCapturing && PeerInterfaces.Any(i => i.IsSelected));
 
-            Status = $"Could not resolve {clean} to MAC. Ping the device first, then try again.";
-            return "00:00:00:00:00:00";
-        }
+        StopCommand = new RelayCommand(
+            async () => await StopCaptureAsync(),
+            () => IsCapturing);
 
-        return NormalizeMac(clean);
+        ClearCommand = new RelayCommand(
+            async () => await ClearAsync());
+
+        CheckCommand = new RelayCommand(Evaluate);
     }
 
-    private static string? GetLocalMacForIp(System.Net.IPAddress ip)
+    // ── Probe ─────────────────────────────────────────────────────────────────
+    private async Task ProbeAsync()
     {
-        foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+        Status = "Probing peer…";
+        PeerInterfaces.Clear();
+
+        try
         {
-            foreach (var addr in nic.GetIPProperties().UnicastAddresses)
+            var body    = JsonSerializer.Serialize(new { peerUrl = PeerUrl });
+            var content = new StringContent(body, Encoding.UTF8, "application/json");
+            var resp    = await _http.PostAsync($"{_proxyBase}/api/remote-capture/probe", content);
+            var json    = await resp.Content.ReadAsStringAsync();
+            var doc     = JsonDocument.Parse(json);
+            var root    = doc.RootElement;
+
+            if (!root.TryGetProperty("ok", out var okProp) || !okProp.GetBoolean())
             {
-                if (addr.Address.Equals(ip))
-                {
-                    var bytes = nic.GetPhysicalAddress().GetAddressBytes();
-                    if (bytes.Length == 6)
-                        return string.Join(":", bytes.Select(b => b.ToString("X2")));
-                }
+                Status = $"Probe failed: {root.GetProperty("error").GetString()}";
+                return;
             }
+
+            if (root.TryGetProperty("interfaces", out var ifaces))
+            {
+                foreach (var iface in ifaces.EnumerateArray())
+                {
+                    PeerInterfaces.Add(new RemoteInterfaceItem
+                    {
+                        Key         = iface.TryGetProperty("key",  out var k) ? k.GetString() ?? "" : "",
+                        Name        = iface.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                        Mac         = iface.TryGetProperty("mac",  out var m) ? m.GetString() ?? "" : "",
+                        State       = iface.TryGetProperty("state",out var s) ? s.GetString() ?? "" : "",
+                        Description = iface.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "",
+                        IsSelected  = false
+                    });
+                }
+                // Auto-select first
+                if (PeerInterfaces.Count > 0)
+                    PeerInterfaces[0].IsSelected = true;
+            }
+
+            Status = $"Probe OK — {PeerInterfaces.Count} NIC(s) found on {PeerUrl}";
+            System.Windows.Input.CommandManager.InvalidateRequerySuggested();
         }
-        return null;
+        catch (Exception ex)
+        {
+            Status = $"Probe error: {ex.Message}";
+        }
     }
 
-    private static string? ResolveIpToMacViaArp(System.Net.IPAddress ip)
+    // ── Start capture ─────────────────────────────────────────────────────────
+    private async Task StartCaptureAsync()
+    {
+        var selected = PeerInterfaces.Where(i => i.IsSelected).Select(i => i.Key).ToArray();
+        if (selected.Length == 0)
+        {
+            Status = "Select at least one interface.";
+            return;
+        }
+
+        // Reset local state
+        Packets.Clear();
+        _lastOffset   = 0;
+        ResultText    = "";
+        TargetAddress = "";
+
+        try
+        {
+            var body    = JsonSerializer.Serialize(new { peerUrl = PeerUrl, interfaces = selected });
+            var content = new StringContent(body, Encoding.UTF8, "application/json");
+            var resp    = await _http.PostAsync($"{_proxyBase}/api/remote-capture/start", content);
+            var json    = await resp.Content.ReadAsStringAsync();
+            var doc     = JsonDocument.Parse(json);
+
+            if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+            {
+                Status = "Start failed: " + (doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : "unknown");
+                return;
+            }
+
+            IsCapturing = true;
+            Status = $"Capturing from {PeerUrl} on [{string.Join(", ", selected)}]…";
+
+            // Poll every 500 ms
+            _pollTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(500)
+            };
+            _pollTimer.Tick += async (_, _) => await PollAsync();
+            _pollTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            Status = $"Start error: {ex.Message}";
+        }
+    }
+
+    // ── Stop capture ──────────────────────────────────────────────────────────
+    private async Task StopCaptureAsync()
+    {
+        _pollTimer?.Stop();
+        _pollTimer = null;
+        IsCapturing = false;
+
+        try
+        {
+            var body    = JsonSerializer.Serialize(new { peerUrl = PeerUrl });
+            var content = new StringContent(body, Encoding.UTF8, "application/json");
+            await _http.PostAsync($"{_proxyBase}/api/remote-capture/stop", content);
+        }
+        catch { /* ignore */ }
+
+        // One final poll
+        await PollAsync();
+        Status = $"Stopped. {Packets.Count} packet(s) captured.";
+    }
+
+    // ── Clear ─────────────────────────────────────────────────────────────────
+    private async Task ClearAsync()
+    {
+        if (IsCapturing) await StopCaptureAsync();
+
+        Packets.Clear();
+        _lastOffset   = 0;
+        ResultText    = "";
+        TargetAddress = "";
+
+        try
+        {
+            var body    = JsonSerializer.Serialize(new { peerUrl = PeerUrl });
+            var content = new StringContent(body, Encoding.UTF8, "application/json");
+            await _http.PostAsync($"{_proxyBase}/api/remote-capture/clear", content);
+        }
+        catch { /* ignore */ }
+
+        Status = "Cleared.";
+    }
+
+    // ── Poll for new packets ──────────────────────────────────────────────────
+    private async Task PollAsync()
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("arp", $"-a {ip}")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using var proc = System.Diagnostics.Process.Start(psi);
-            if (proc == null) return null;
-            var output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(2000);
+            var url  = $"{_proxyBase}/api/remote-capture/packets?peerUrl={Uri.EscapeDataString(PeerUrl)}&limit=500&offset={_lastOffset}";
+            var resp = await _http.GetAsync(url);
+            var json = await resp.Content.ReadAsStringAsync();
+            var doc  = JsonDocument.Parse(json);
+            var root = doc.RootElement;
 
-            foreach (var line in output.Split('\n'))
+            if (!root.TryGetProperty("rows", out var rowsProp)) return;
+
+            var rows  = rowsProp.EnumerateArray().ToList();
+            if (rows.Count == 0) return;
+
+            _lastOffset += rows.Count;
+
+            foreach (var row in rows)
             {
-                if (!line.Contains(ip.ToString())) continue;
-                var match = System.Text.RegularExpressions.Regex.Match(
-                    line, @"([0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2}[-:][0-9a-fA-F]{2})");
-                if (match.Success)
-                    return match.Value.Replace("-", ":").ToUpperInvariant();
+                var pkt = ParseRow(Packets.Count + 1, row);
+                Packets.Add(pkt);
             }
         }
-        catch { }
-        return null;
+        catch { /* silently ignore polling errors */ }
     }
 
-    private void EvaluateCaptureResult(string mac)
+    // ── Parse a packet JSON element into RemoteCaptureRow ────────────────────
+    private static RemoteCaptureRow ParseRow(int no, JsonElement row)
     {
-        var selected = GetSelectedInterfaces();
-        var tx = selected.FirstOrDefault();
-        var rx = selected.Skip(1).ToList();
-        var packets = _capture.GetPacketsSnapshot(5000);
+        var decoded = row.TryGetProperty("decoded", out var dec) ? dec : default;
+        var eth     = decoded.ValueKind != JsonValueKind.Undefined && decoded.TryGetProperty("ethernet", out var e) ? e
+                    : decoded.ValueKind != JsonValueKind.Undefined && decoded.TryGetProperty("eth",      out var e2) ? e2
+                    : default;
 
-        var matches = packets
-            .Where(p => p.DstMac.Equals(mac, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        string Get(JsonElement el, string prop) =>
+            el.ValueKind != JsonValueKind.Undefined && el.TryGetProperty(prop, out var v) ? v.GetString() ?? "" : "";
 
-        var txHits = tx == null
-            ? new List<CaptureRow>()
-            : matches.Where(p => InterfaceMatches(p.InterfaceName, tx.Name)).ToList();
+        var srcMac = Get(eth, "srcMac") is { Length: > 0 } sm ? sm : Get(eth, "src");
+        var dstMac = Get(eth, "dstMac") is { Length: > 0 } dm ? dm : Get(eth, "dst");
 
-        var rxHits = rx.Count == 0
-            ? matches.Where(p => tx == null || !InterfaceMatches(p.InterfaceName, tx.Name)).ToList()
-            : matches.Where(p => rx.Any(i => InterfaceMatches(p.InterfaceName, i.Name))).ToList();
+        JsonElement ipv4 = default, arp = default, ipv6 = default;
+        if (decoded.ValueKind != JsonValueKind.Undefined)
+        {
+            decoded.TryGetProperty("ipv4",  out ipv4);
+            decoded.TryGetProperty("arp",   out arp);
+            decoded.TryGetProperty("ipv6",  out ipv6);
+        }
 
-        var unexpectedRx = rx.Count == 0
-            ? new List<CaptureRow>()
-            : matches.Where(p => !rx.Any(i => InterfaceMatches(p.InterfaceName, i.Name)) &&
-                                 (tx == null || !InterfaceMatches(p.InterfaceName, tx.Name))).ToList();
+        var srcIp = Get(ipv4, "src") is { Length: > 0 } si ? si
+                  : Get(arp,  "senderIp") is { Length: > 0 } ai ? ai
+                  : Get(ipv6, "src");
 
-        var rxSummary = rxHits
-            .GroupBy(p => p.InterfaceName, StringComparer.OrdinalIgnoreCase)
-            .Select(g => $"{ShortName(g.Key)}:{g.Count()}")
-            .ToList();
+        var dstIp = Get(ipv4, "dst") is { Length: > 0 } di ? di
+                  : Get(arp,  "targetIp") is { Length: > 0 } ati ? ati
+                  : Get(ipv6, "dst");
 
-        var txOnlyWarning = rxHits.Count == 0 && txHits.Count > 0
-            ? " TX only capture is ignored for pass."
+        // Timestamp
+        double ts = row.TryGetProperty("timestamp", out var tsProp) ? tsProp.GetDouble() : 0;
+        var dt = DateTimeOffset.FromUnixTimeMilliseconds((long)(ts * 1000));
+        var tStr = dt.ToLocalTime().ToString("HH:mm:ss.fff");
+
+        // Protocol
+        var proto = "ETH";
+        if (decoded.ValueKind != JsonValueKind.Undefined)
+        {
+            if (decoded.TryGetProperty("udp",    out _)) proto = "UDP";
+            else if (decoded.TryGetProperty("tcp",  out _)) proto = "TCP";
+            else if (decoded.TryGetProperty("icmp", out _)) proto = "ICMP";
+            else if (decoded.TryGetProperty("arp",  out _)) proto = "ARP";
+            else if (decoded.TryGetProperty("ipv6", out _)) proto = "IPv6";
+            else if (decoded.TryGetProperty("ipv4", out _)) proto = "IPv4";
+        }
+
+        var iface  = row.TryGetProperty("interface", out var ifProp) ? ifProp.GetString() ?? "" : "";
+        var length = row.TryGetProperty("length",    out var lenProp) ? lenProp.GetInt32() : 0;
+        var detail = decoded.ValueKind != JsonValueKind.Undefined
+            ? JsonSerializer.Serialize(decoded, new JsonSerializerOptions { WriteIndented = true })
             : "";
 
-        if (rxHits.Count > 0 && unexpectedRx.Count == 0)
+        return new RemoteCaptureRow
         {
-            ResultText = $"Result: PASS - RX matched {mac} ({string.Join(" | ", rxSummary)})";
-            Status = $"PASS. Destination {mac} was captured on RX interface(s).{txOnlyWarning}";
-        }
-        else
-        {
-            var observed = matches.Count == 0
-                ? "no matching packet"
-                : string.Join(", ", matches.Select(p => ShortName(p.InterfaceName)).Distinct(StringComparer.OrdinalIgnoreCase));
-            ResultText = $"Result: FAIL - expected RX match for {mac}, observed {observed}";
-            Status = $"FAIL. Destination {mac} was not captured on RX interface(s).{txOnlyWarning}";
-        }
-    }
-
-    private List<CaptureInterfaceItem> GetSelectedInterfaces() =>
-        _capture.Interfaces.Where(i => i.IsSelected).ToList();
-
-    private void UpdateTxRxSummary()
-    {
-        var selected = GetSelectedInterfaces();
-        var tx = selected.FirstOrDefault();
-        var rx = selected.Skip(1).ToList();
-        TxInterfaceName = tx == null ? "(none)" : ShortName(tx.Name);
-        RxInterfaceNames = rx.Count == 0 ? "(all non-TX captures)" : string.Join(", ", rx.Select(i => ShortName(i.Name)));
-    }
-
-    private string? GetDefaultRxMac()
-    {
-        var selected = GetSelectedInterfaces();
-        var rx = selected.Skip(1).FirstOrDefault();
-        var bytes = rx?.Device.MacAddress?.GetAddressBytes();
-        return bytes is { Length: 6 } ? string.Join(":", bytes.Select(b => b.ToString("X2"))) : null;
-    }
-
-    private string? GetSelectedCaptureMac()
-    {
-        var mac = _capture.Interfaces
-            .Where(i => i.IsSelected)
-            .Select(i => i.Device.MacAddress?.GetAddressBytes())
-            .FirstOrDefault(bytes => bytes is { Length: 6 });
-
-        return mac == null ? null : string.Join(":", mac.Select(b => b.ToString("X2")));
-    }
-
-    private static string NormalizeMac(string value)
-    {
-        var hex = value.Trim().Replace("-", ":").ToUpperInvariant();
-        if (hex.Contains(':'))
-            return hex;
-
-        var compact = hex.Replace(":", "");
-        return compact.Length == 12
-            ? string.Join(":", Enumerable.Range(0, 6).Select(i => compact.Substring(i * 2, 2)))
-            : hex;
-    }
-
-    private static bool InterfaceMatches(string observed, string expected)
-    {
-        if (observed.Equals(expected, StringComparison.OrdinalIgnoreCase)) return true;
-        if (observed.Contains(expected, StringComparison.OrdinalIgnoreCase)) return true;
-        if (expected.Contains(observed, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
-    }
-
-    private static string ShortName(string name)
-    {
-        if (name.Length <= 26) return name;
-        var trimmed = name.Replace("\\Device\\NPF_", "", StringComparison.OrdinalIgnoreCase);
-        return trimmed.Length <= 26 ? trimmed : trimmed[..26] + "...";
-    }
-
-    private void OpenFile()
-    {
-        var dlg = new OpenFileDialog
-        {
-            Filter = "NDJSON / JSONL (*.ndjson;*.jsonl)|*.ndjson;*.jsonl|JSON / Text (*.json;*.txt)|*.json;*.txt|All Files (*.*)|*.*"
+            No            = no,
+            Time          = tStr,
+            InterfaceName = iface,
+            SrcMac        = srcMac,
+            DstMac        = dstMac,
+            Source        = srcIp,
+            Destination   = dstIp,
+            Protocol      = proto,
+            Length        = length,
+            Info          = $"{srcMac} → {dstMac}",
+            DetailJson    = detail
         };
-        if (dlg.ShowDialog() != true) return;
-
-        NdjsonText = File.ReadAllText(dlg.FileName);
-        Parse();
     }
 
-    private void Parse()
+    // ── PASS/FAIL evaluation ──────────────────────────────────────────────────
+    private void Evaluate()
     {
-        Rows.Clear();
-        foreach (var result in _importService.ParseLines(NdjsonText))
+        var addr = (TargetAddress ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(addr))
         {
-            Rows.Add(new NdjsonPreviewRow
-            {
-                LineNumber = result.LineNumber,
-                State = result.Ok ? "OK" : "ERR",
-                Name = result.Name,
-                InterfaceName = result.InterfaceName,
-                Length = result.Length,
-                RepeatCount = result.RepeatCount,
-                IntervalMs = result.IntervalMs,
-                Summary = result.Summary,
-                Error = result.Error,
-                Packet = result.Packet
-            });
+            ResultText = "";
+            return;
         }
 
-        RefreshCounts();
-        Status = $"Parsed {Rows.Count} lines. Valid {ValidCount}, errors {ErrorCount}.";
+        var matches = Packets.Where(p => RowMatchesAddr(p, addr)).ToList();
+        var verdict = matches.Count > 0 ? "PASS" : "FAIL";
+        ResultText = $"{verdict}  —  Target: {addr}  |  Matched: {matches.Count} packet(s)";
+        Status     = $"{verdict}: {matches.Count} packet(s) matched address '{addr}'.";
     }
 
-    private void LoadIntoPacketList(bool replace)
+    private static bool RowMatchesAddr(RemoteCaptureRow row, string addr)
     {
-        if (replace)
-            _packetList.Sequence.Clear();
-
-        var added = 0;
-        foreach (var row in Rows.Where(r => r.Packet != null))
+        // IP match
+        if (System.Text.RegularExpressions.Regex.IsMatch(addr, @"^\d{1,3}\.\d{1,3}"))
         {
-            for (var i = 0; i < row.RepeatCount; i++)
-            {
-                var packet = ClonePacket(row.Packet!);
-                if (row.RepeatCount > 1)
-                    packet.Name = $"{row.Name}-{i + 1}";
-
-                _packetList.Sequence.Add(new SequenceItem(packet));
-                added++;
-
-                if (row.IntervalMs > 0 && i < row.RepeatCount - 1)
-                    _packetList.Sequence.Add(new SequenceItem(new SequenceEvent { DelayMs = row.IntervalMs }));
-            }
+            return row.Source.Contains(addr, StringComparison.OrdinalIgnoreCase) ||
+                   row.Destination.Contains(addr, StringComparison.OrdinalIgnoreCase);
         }
-
-        _packetList.SelectedSequenceItem = _packetList.Sequence.LastOrDefault();
-        Status = $"{added} packets loaded into Send List. Use Packet Generator/Scenario Lab or press Send List here.";
+        // MAC match (substring)
+        var normAddr = addr.Replace("-", ":").Replace(" ", "");
+        var normSrc  = row.SrcMac.ToLowerInvariant().Replace("-", ":");
+        var normDst  = row.DstMac.ToLowerInvariant().Replace("-", ":");
+        return normSrc.Contains(normAddr) || normDst.Contains(normAddr);
     }
 
-    private static PacketItem ClonePacket(PacketItem source)
+    // ── IDisposable ───────────────────────────────────────────────────────────
+    public void Dispose()
     {
-        var clone = new PacketItem { Name = source.Name };
-        foreach (var iface in source.OutgoingInterfaceNames)
-            clone.OutgoingInterfaceNames.Add(iface);
-
-        var raw = source.FullBytes;
-        if (raw.Length >= 14)
-        {
-            var eth = new EthernetBlock();
-            eth.ImportBytes(raw, 0);
-            clone.Blocks.Add(eth);
-
-            if (raw.Length > 14)
-            {
-                var payload = new RawPayloadBlock();
-                payload.SetBytes(raw.Skip(14).ToArray());
-                clone.Blocks.Add(payload);
-            }
-        }
-        else
-        {
-            var payload = new RawPayloadBlock();
-            payload.SetBytes(raw);
-            clone.Blocks.Add(payload);
-        }
-
-        clone.Invalidate();
-        return clone;
-    }
-
-    private void Clear()
-    {
-        NdjsonText = "";
-        Rows.Clear();
-        RefreshCounts();
-        ClearCaptureAddress();
-    }
-
-    private void RefreshCounts()
-    {
-        OnPropertyChanged(nameof(ValidCount));
-        OnPropertyChanged(nameof(ErrorCount));
-        System.Windows.Input.CommandManager.InvalidateRequerySuggested();
+        _pollTimer?.Stop();
+        _pollTimer = null;
     }
 }

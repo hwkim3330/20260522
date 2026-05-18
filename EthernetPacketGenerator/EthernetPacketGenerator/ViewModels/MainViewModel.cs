@@ -64,7 +64,7 @@ public class MainViewModel : ViewModelBase
         SendVM          = new SendViewModel(_serial);
         TestCaseMgrVM   = new TestCaseManagerViewModel(PacketListVM);
         TestCaseMgrVM.AttachCapture(CaptureVM);
-        NdjsonBridgeVM  = new NdjsonBridgeViewModel(PacketListVM, SendVM, CaptureVM, TestCaseMgrVM);
+        NdjsonBridgeVM  = new NdjsonBridgeViewModel();
         AutomationVM    = new AutomationViewModel(PacketListVM, TestCaseMgrVM, PacketFlowMonitorVM);
         SettingsVM      = new SettingsViewModel();
 
