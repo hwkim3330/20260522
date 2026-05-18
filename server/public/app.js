@@ -4796,9 +4796,7 @@ document.getElementById('mdioLinkStatusBtn')?.addEventListener('click', async ()
     grid.innerHTML = (d.ports || []).map(p => {
       const cls   = p.linkUp === true ? 'up' : p.linkUp === false ? 'down' : '';
       const label = p.linkUp === true ? 'UP' : p.linkUp === false ? 'DOWN' : '—';
-      const bg    = p.linkUp === true ? '#22c55e' : p.linkUp === false ? '#ef4444' : '#888';
-      return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:20px;border:1px solid ${bg};font-size:.75rem;font-weight:600;color:${bg};">
-        <span style="width:8px;height:8px;border-radius:50%;background:${bg};"></span>P${p.port} ${label}</span>`;
+      return `<span class="mdioLinkBadge ${cls}"><span class="mdioLinkDot"></span>P${p.port} ${label}</span>`;
     }).join('');
   } catch (e) { grid.innerHTML = `<span style="color:#b91c1c;font-size:.8rem;">오류: ${e.message}</span>`; }
 });
@@ -4869,7 +4867,7 @@ document.getElementById('tsSetBtn')?.addEventListener('click', async () => {
   } catch (e) { out.textContent = `오류: ${e.message}`; out.style.color = '#b91c1c'; }
 });
 
-// Auto-fill "Set Time" fields when entering Control sub-tab
+// Auto-fill "Set Time" fields and auto-read Timestamp when entering Control sub-tab
 document.querySelector('[data-htview="controlView"]')?.addEventListener('click', () => {
   const now = new Date();
   const trySet = (id, v) => { const el = document.getElementById(id); if (el && !el.dataset.userEdited) el.value = v; };
@@ -4879,6 +4877,19 @@ document.querySelector('[data-htview="controlView"]')?.addEventListener('click',
   trySet('tsHour',  now.getHours());
   trySet('tsMin',   now.getMinutes());
   trySet('tsSec',   now.getSeconds());
+
+  // Auto-read timestamp from hardware on tab entry
+  const disp = document.getElementById('timestampDisplay');
+  if (disp) {
+    disp.textContent = '읽는 중...';
+    api('/api/timestamp/read').then((d) => {
+      disp.textContent = d.isoString ? `${d.isoString}  (ns: ${d.ns})` : `sec=0x${(d.sec || 0).toString(16).toUpperCase()}  ns=${d.ns}`;
+      disp.style.color = 'var(--accent)';
+    }).catch((e) => {
+      disp.textContent = `(읽기 실패: ${e.message})`;
+      disp.style.color = 'var(--muted)';
+    });
+  }
 }, { capture: true });
 
 // =============================================================================

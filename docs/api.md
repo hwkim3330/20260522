@@ -339,6 +339,104 @@ FDB 테이블 초기화.
 
 ---
 
+## MDIO / PHY
+
+### POST /mdio/read
+PHY 레지스터 읽기. MDIO 버스를 통해 지정 포트/PHY 주소/레지스터 주소를 읽습니다.
+
+**Request body:**
+```json
+{ "port": 0, "phyAddr": "0x00", "regAddr": "0x01" }
+```
+
+**Response:**
+```json
+{ "ok": true, "value": "0x796D", "raw": 31085 }
+```
+
+### POST /mdio/write
+PHY 레지스터 쓰기.
+
+**Request body:**
+```json
+{ "port": 0, "phyAddr": "0x00", "regAddr": "0x00", "value": "0x1200" }
+```
+
+### GET /mdio/link-status
+모든 6개 포트의 링크 상태 읽기 (BMSR reg 0x01 bit2).
+
+**Response:**
+```json
+{ "ok": true, "ports": [{ "port": 0, "linkUp": true }, { "port": 1, "linkUp": false }] }
+```
+
+### POST /mdio/setup
+포트별 MDIO 컨트롤러 설정 (클럭 속도, 활성화, 인터럽트).
+
+**Request body:**
+```json
+{ "port": 0, "enable": true, "preDisable": false, "interruptEnable": false, "targetMhz": 2.5 }
+```
+
+**Response:**
+```json
+{ "ok": true, "setup": "0x01610000", "time": "0x00064009", "clk": 20, "ms": 2500 }
+```
+
+---
+
+## Counter (포트 카운터)
+
+### GET /counter/read?port=all|0-5
+시리얼 포트를 통해 스위치 포트 카운터를 읽습니다.
+
+Query: `?port=all` (기본) 또는 `?port=0` ~ `?port=5`
+
+**Response:**
+```json
+{
+  "ok": true,
+  "counters": [
+    { "group": "RX0", "name": "RX0_PKT", "address": "0x1000", "value": "0x0000001A", "valueDec": 26 }
+  ]
+}
+```
+
+---
+
+## Timestamp (PTP 클럭)
+
+### GET /timestamp/read
+하드웨어 PTP 타임스탬프를 읽습니다. NS 읽기가 SEC 스냅샷을 트리거합니다.
+
+**Response:**
+```json
+{ "ok": true, "ns": 123456789, "secLo": 1747555200, "secHi": 0, "sec": 1747555200, "isoString": "2025-05-18T12:00:00.000Z" }
+```
+
+### POST /timestamp/set
+하드웨어 PTP 타임스탬프를 설정합니다.
+
+**Request body:**
+```json
+{ "year": 2025, "month": 5, "day": 18, "hour": 12, "min": 0, "sec": 0, "ns": 0 }
+```
+
+**Response:**
+```json
+{ "ok": true, "unixSec": 1747555200, "isoString": "2025-05-18T12:00:00.000Z" }
+```
+
+### GET /timestamp/status
+ADDEND, INCREMENT, PPS 설정을 읽습니다.
+
+**Response:**
+```json
+{ "ok": true, "ctrl0": "0x00000000", "ctrl1": "0x00000000", "addend": 0, "increment": 0, "ppsSrc": 1, "ppsWidthMs": 100 }
+```
+
+---
+
 ## WebSocket 이벤트
 
 브라우저는 `ws://localhost:8080` 에 연결하여 워커 이벤트를 수신합니다.

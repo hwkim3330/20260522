@@ -170,6 +170,14 @@ Base URL: `http://localhost:8080/api`
 | POST | `/scenario/run` | 시나리오 실행 |
 | POST | `/tests/run` | 테스트 케이스 실행 |
 | GET | `/workers` | 연결된 워커 노드 목록 |
+| POST | `/mdio/read` | PHY 레지스터 읽기 |
+| POST | `/mdio/write` | PHY 레지스터 쓰기 |
+| GET | `/mdio/link-status` | 6포트 링크 상태 (BMSR) |
+| POST | `/mdio/setup` | MDIO 컨트롤러 설정 |
+| GET | `/counter/read` | 포트 카운터 읽기 (시리얼) |
+| GET | `/timestamp/read` | PTP 하드웨어 타임스탬프 읽기 |
+| POST | `/timestamp/set` | PTP 타임스탬프 설정 |
+| GET | `/timestamp/status` | ADDEND / INCREMENT / PPS 상태 |
 | GET | `/version` | 버전 정보 |
 | GET | `/csharp/health` | WPF 워커 연결 상태 |
 

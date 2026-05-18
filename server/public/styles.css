@@ -3390,3 +3390,50 @@ body:not(.controlMode) .linkStrip { display: none; }
 .sysCtrlStatus.sysCtrlOk  { color: var(--ok); }
 .sysCtrlStatus.sysCtrlErr { color: #b91c1c; }
 .sysCtrlStatus.sysCtrlWarn { color: var(--warn); }
+
+/* ── MDIO link status badge ──────────────────────────────────────────────── */
+.mdioLinkBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.mdioLinkBadge .mdioLinkDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.mdioLinkBadge.up   { border-color: #22c55e; color: #22c55e; }
+.mdioLinkBadge.down { border-color: #ef4444; color: #ef4444; }
+.mdioLinkBadge.up   .mdioLinkDot { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+.mdioLinkBadge.down .mdioLinkDot { background: #ef4444; }
+
+/* ── Timestamp card form ─────────────────────────────────────────────────── */
+#timestampCard .monoInput {
+  font-size: 0.82rem;
+}
+
+/* ── Counter table inside control panel ──────────────────────────────────── */
+#counterTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+#counterTable th, #counterTable td {
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+#counterTable th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.75rem;
+  background: var(--bg);
+}
+#counterTable tbody tr:hover { background: var(--panel); }
