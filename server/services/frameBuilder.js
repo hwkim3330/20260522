@@ -89,6 +89,37 @@ function buildARP(p) {
   return b;
 }
 
+function buildTCP(p, seq) {
+  const t      = p.tcp || {};
+  const data   = payloadBytes(p, seq);
+  const sp     = t.srcPort  ?? p.srcPort  ?? 40000;
+  const dp     = t.dstPort  ?? p.dstPort  ?? 50000;
+  const seqNum = t.seq      ?? (seq != null ? seq : 0);
+  const ackNum = t.ack      ?? 0;
+  // Default: PSH+ACK (0x18) when payload present, SYN (0x02) otherwise
+  const flags  = t.flags    ?? (data.length > 0 ? 0x18 : 0x02);
+  const win    = t.window   ?? 65535;
+
+  const hdr = Buffer.alloc(20);
+  hdr.writeUInt16BE(sp,      0);
+  hdr.writeUInt16BE(dp,      2);
+  hdr.writeUInt32BE(seqNum,  4);
+  hdr.writeUInt32BE(ackNum,  8);
+  hdr[12] = 0x50;               // data offset = 5 (20 bytes header)
+  hdr[13] = flags;
+  hdr.writeUInt16BE(win,    14);
+
+  const ip     = p.ipv4 || {};
+  const srcIp  = Buffer.from((ip.src || '0.0.0.0').split('.').map(Number));
+  const dstIp  = Buffer.from((ip.dst || '0.0.0.0').split('.').map(Number));
+  const tcpLen = 20 + data.length;
+  const pseudo = Buffer.concat([srcIp, dstIp, Buffer.from([0, 6]), u16be(tcpLen)]);
+  const cs     = checksum(Buffer.concat([pseudo, hdr, data]));
+  hdr.writeUInt16BE(cs, 16);
+
+  return Buffer.concat([hdr, data]);
+}
+
 function buildIPv4(p, proto, innerPayload) {
   const ip  = p.ipv4 || {};
   const ttl = ip.ttl ?? 64;
@@ -155,6 +186,9 @@ function buildFrame(profile, seq) {
       break;
     case 'icmp':
       frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 1, buildICMP(p, seq))]);
+      break;
+    case 'tcp':
+      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 6, buildTCP(p, seq))]);
       break;
     case 'arp':
       frame = Buffer.concat([buildEthHdr(p, 0x0806), buildARP(p)]);
