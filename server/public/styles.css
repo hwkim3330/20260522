@@ -1885,23 +1885,10 @@ tbody tr.selectedRow {
   display: grid;
 }
 
-/* Capture mode: force the capture pane to fill the viewport like a real packet
-   analyser. Override the default workspace -> roleView -> workPane chain. */
-/* In capture mode, pin the wireshark pane to fill the viewport below the
-   topbar+toolbar. Working around the multi-level grid heights that don't
-   reliably propagate. */
+/* Capture mode: wiresharkPane fills the captureView grid area.
+   html/body/app have definite heights so position:fixed is not needed. */
 body.captureMode .wiresharkPane {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: 158px;
-  z-index: 5;
   background: #fafbfc;
-}
-body.captureMode .workspace {
-  height: 100%;
-  min-height: 0;
 }
 #labView.roleView {
   grid-template-columns: 1fr;
@@ -1920,6 +1907,7 @@ body.captureMode .workspace {
   box-shadow: none;
   min-height: 0;
   height: 100%;
+  overflow: hidden; /* wiresharkPane manages its own internal scroll */
 }
 
 .workPane {
