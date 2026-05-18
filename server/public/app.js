@@ -3744,6 +3744,110 @@ function regParseInput(val) {
   return s;
 }
 
+// ── System Control helpers ─────────────────────────────────────────────────────
+// Offset is relative to base address. The server-side register API already applies
+// the base address stored in the C# app, so we send the offset raw.  But the web UI
+// adds its own "Base Address" field so users can cross-check / override.  The field
+// is informational only (the server owns the real base); we use it just for display.
+
+function sysCtrlSetStatus(text, kind) {
+  const el = document.getElementById('regSysCtrlStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'sysCtrlStatus' + (kind === 'ok' ? ' sysCtrlOk' : kind === 'err' ? ' sysCtrlErr' : kind === 'warn' ? ' sysCtrlWarn' : '');
+}
+
+function parseBcdByte(b) {
+  return ((b >> 4) & 0xF) * 10 + (b & 0xF);
+}
+
+function parseVersionWord(v) {
+  const major = (v >>> 24) & 0xFF;
+  const year  = (v >>> 16) & 0xFF;
+  const month = (v >>> 12) & 0xF;
+  const day   = (v >>>  4) & 0xFF;
+  const minor =  v         & 0xF;
+  const majorName = major === 0x52 ? 'TSGW' : `0x${major.toString(16).toUpperCase().padStart(2,'0')}`;
+  const yearVal = parseBcdByte(year);
+  const dayVal  = parseBcdByte(day);
+  const monthNames = ['','1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  const monthStr = monthNames[month] || `${month}월`;
+  return `${majorName}  20${String(yearVal).padStart(2,'0')}년 ${monthStr} ${String(dayVal).padStart(2,'0')}일  v${minor}`;
+}
+
+async function sysCtrlReadVersion() {
+  const d = await api('/api/register/read', { method: 'POST', body: JSON.stringify({ offset: '0x000' }) });
+  const raw = parseInt(d.value, 16);
+  const verEl = document.getElementById('regVersionDisplay');
+  if (verEl) verEl.textContent = parseVersionWord(raw) + `  (raw: ${d.value})`;
+}
+
+async function sysCtrlReadEnable() {
+  const d = await api('/api/register/read', { method: 'POST', body: JSON.stringify({ offset: '0x008' }) });
+  const v = parseInt(d.value, 16);
+  const ports = (v >>> 8) & 0xFF;
+  const checks = ['regP0','regP1','regP2','regP3','regP4','regP5','regP6','regP7'];
+  checks.forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = (ports & (1 << i)) !== 0;
+  });
+  const tsgw = document.getElementById('regTsgwEnable');
+  if (tsgw) tsgw.checked = (v & 0x1) !== 0;
+}
+
+async function sysCtrlReadHostIf() {
+  const d = await api('/api/register/read', { method: 'POST', body: JSON.stringify({ offset: '0x00C' }) });
+  const v = parseInt(d.value, 16);
+  const wrEl = document.getElementById('regAhbWrWait');
+  const rdEl = document.getElementById('regAhbRdWait');
+  if (wrEl) wrEl.value = v & 0xF;
+  if (rdEl) rdEl.value = (v >>> 4) & 0xF;
+}
+
+document.getElementById('regReadAllBtn')?.addEventListener('click', async () => {
+  sysCtrlSetStatus('읽는 중...', '');
+  try {
+    await sysCtrlReadVersion();
+    await sysCtrlReadEnable();
+    await sysCtrlReadHostIf();
+    sysCtrlSetStatus('읽기 완료', 'ok');
+  } catch (e) { sysCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
+document.getElementById('regLoadDefaultsBtn')?.addEventListener('click', async () => {
+  sysCtrlSetStatus('기본값 로드 중...', '');
+  try {
+    await api('/api/register/write', { method: 'POST', body: JSON.stringify({ offset: '0x004', value: '0x1' }) });
+    sysCtrlSetStatus('기본값 로드 완료', 'ok');
+  } catch (e) { sysCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
+document.getElementById('regApplyEnableBtn')?.addEventListener('click', async () => {
+  sysCtrlSetStatus('Enable 설정 적용 중...', '');
+  try {
+    const checks = ['regP0','regP1','regP2','regP3','regP4','regP5','regP6','regP7'];
+    let ports = 0;
+    checks.forEach((id, i) => {
+      if (document.getElementById(id)?.checked) ports |= (1 << i);
+    });
+    const tsgw = document.getElementById('regTsgwEnable')?.checked ? 1 : 0;
+    const v = tsgw | (ports << 8);
+    await api('/api/register/write', { method: 'POST', body: JSON.stringify({ offset: '0x008', value: `0x${v.toString(16).toUpperCase()}` }) });
+    sysCtrlSetStatus(`Enable 적용 완료 (0x${v.toString(16).toUpperCase().padStart(8,'0')})`, 'ok');
+  } catch (e) { sysCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
+document.getElementById('regApplyAhbBtn')?.addEventListener('click', async () => {
+  sysCtrlSetStatus('AHB 설정 적용 중...', '');
+  try {
+    const wr = Math.max(0, Math.min(15, parseInt(document.getElementById('regAhbWrWait')?.value || '15', 10)));
+    const rd = Math.max(0, Math.min(15, parseInt(document.getElementById('regAhbRdWait')?.value || '15', 10)));
+    const v = (rd << 4) | wr;
+    await api('/api/register/write', { method: 'POST', body: JSON.stringify({ offset: '0x00C', value: `0x${v.toString(16).toUpperCase()}` }) });
+    sysCtrlSetStatus(`AHB 적용 완료 (WR=${wr}, RD=${rd})`, 'ok');
+  } catch (e) { sysCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
 document.getElementById('regReadBtn')?.addEventListener('click', async () => {
   const out = document.getElementById('regReadResult');
   if (!out) return;
@@ -3779,6 +3883,179 @@ document.querySelector('[data-htview="registerView"]')?.addEventListener('click'
 // ── FDB Tab ───────────────────────────────────────────────────────────────────
 const MAC_RE = /^([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}$/;
 
+// FDB Control helpers
+const FDB_OFF_VERSION    = '0xA00';
+const FDB_OFF_FDB_LOAD   = '0xA04';
+const FDB_OFF_ENABLE     = '0xA0C';
+const FDB_OFF_AGE_PERIOD = '0xA10';
+const FDB_OFF_AGING_THR  = '0xA14';
+const FDB_OFF_MCU_MAC0   = '0xA18';
+const FDB_OFF_MCU_MAC1   = '0xA1C';
+const FDB_OFF_MCU_VLAN   = '0xA20';
+const FDB_OFF_MCU_BUCKET = '0xA28';
+const FDB_OFF_MCU_CMD    = '0xA2C';
+const FDB_OFF_FDB_STATUS = '0xA40';
+const FDB_OFF_CMD_STATUS = '0xA44';
+const FDB_OFF_RD_BUCKET  = '0xA48';
+const FDB_OFF_RD_PORT    = '0xA4C';
+const FDB_OFF_RD_FLAGS   = '0xA50';
+const FDB_OFF_RD_MAC0    = '0xA54';
+const FDB_OFF_RD_MAC1    = '0xA58';
+const FDB_OFF_RD_MAC2    = '0xA5C';
+
+function fdbCtrlSetStatus(text, kind) {
+  const el = document.getElementById('fdbCtrlStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'sysCtrlStatus' + (kind === 'ok' ? ' sysCtrlOk' : kind === 'err' ? ' sysCtrlErr' : kind === 'warn' ? ' sysCtrlWarn' : '');
+}
+
+async function fdbRegRead(offset) {
+  const d = await api('/api/register/read', { method: 'POST', body: JSON.stringify({ offset }) });
+  return parseInt(d.value, 16);
+}
+
+async function fdbRegWrite(offset, value) {
+  await api('/api/register/write', { method: 'POST', body: JSON.stringify({ offset, value: `0x${value.toString(16).toUpperCase().padStart(8,'0')}` }) });
+}
+
+async function fdbPollStatus(bitMask, statusOffset, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const v = await fdbRegRead(statusOffset);
+    if ((v & bitMask) !== 0) return;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  throw new Error(`폴링 타임아웃 (mask=0x${bitMask.toString(16)}, offset=${statusOffset})`);
+}
+
+function parseMacToWords(mac) {
+  const bytes = mac.split(':').map(s => parseInt(s, 16));
+  // bytes[0]=MSB ... bytes[5]=LSB
+  // MAC0 = bytes[2..5] (little-endian layout matching C# service)
+  const mac0 = (bytes[2] << 24) | (bytes[3] << 16) | (bytes[4] << 8) | bytes[5];
+  const mac1 = (bytes[0] << 8)  |  bytes[1];
+  return { mac0: mac0 >>> 0, mac1: mac1 >>> 0 };
+}
+
+function formatMacFromWords(hi16, mid16, lo16) {
+  const b = (n, shift, mask) => ((n >>> shift) & mask).toString(16).padStart(2, '0').toUpperCase();
+  return `${b(hi16,8,0xFF)}:${b(hi16,0,0xFF)}:${b(mid16,8,0xFF)}:${b(mid16,0,0xFF)}:${b(lo16,8,0xFF)}:${b(lo16,0,0xFF)}`;
+}
+
+document.getElementById('fdbReadStatusBtn')?.addEventListener('click', async () => {
+  fdbCtrlSetStatus('읽는 중...', '');
+  try {
+    const ver = await fdbRegRead(FDB_OFF_VERSION);
+    const verEl = document.getElementById('fdbVersionDisplay');
+    if (verEl) verEl.textContent = `Version: 0x${ver.toString(16).toUpperCase().padStart(8,'0')}`;
+
+    const en = await fdbRegRead(FDB_OFF_ENABLE);
+    const ageScan  = document.getElementById('fdbAgeScanEnable');
+    const learning = document.getElementById('fdbLearningEnable');
+    const lookup   = document.getElementById('fdbLookupEnable');
+    if (ageScan)  ageScan.checked  = (en & (1 << 4)) !== 0;
+    if (learning) learning.checked = (en & (1 << 1)) !== 0;
+    if (lookup)   lookup.checked   = (en & (1 << 0)) !== 0;
+
+    const agePeriod = await fdbRegRead(FDB_OFF_AGE_PERIOD);
+    const agingThr  = await fdbRegRead(FDB_OFF_AGING_THR);
+    const apEl = document.getElementById('fdbAgePeriodNs');
+    const atEl = document.getElementById('fdbAgingThr');
+    if (apEl) apEl.value = agePeriod;
+    if (atEl) atEl.value = agingThr;
+
+    fdbCtrlSetStatus('읽기 완료', 'ok');
+  } catch (e) { fdbCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
+document.getElementById('fdbLoadDefaultsBtn')?.addEventListener('click', async () => {
+  fdbCtrlSetStatus('Default Load 중...', '');
+  try {
+    await fdbRegWrite(FDB_OFF_FDB_LOAD, 1);
+    fdbCtrlSetStatus('Default Load 완료', 'ok');
+  } catch (e) { fdbCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
+document.getElementById('fdbApplyEnableBtn')?.addEventListener('click', async () => {
+  fdbCtrlSetStatus('Enable 적용 중...', '');
+  try {
+    let en = 0;
+    if (document.getElementById('fdbAgeScanEnable')?.checked)  en |= (1 << 4);
+    if (document.getElementById('fdbLearningEnable')?.checked) en |= (1 << 1);
+    if (document.getElementById('fdbLookupEnable')?.checked)   en |= (1 << 0);
+    await fdbRegWrite(FDB_OFF_ENABLE, en);
+    fdbCtrlSetStatus(`ENABLE 적용 완료 (0x${en.toString(16).toUpperCase()})`, 'ok');
+  } catch (e) { fdbCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
+document.getElementById('fdbApplyAgingBtn')?.addEventListener('click', async () => {
+  fdbCtrlSetStatus('Aging 설정 적용 중...', '');
+  try {
+    const ap = parseInt(document.getElementById('fdbAgePeriodNs')?.value || '0', 10);
+    const at = parseInt(document.getElementById('fdbAgingThr')?.value    || '0', 10);
+    await fdbRegWrite(FDB_OFF_AGE_PERIOD, ap);
+    await fdbRegWrite(FDB_OFF_AGING_THR,  at);
+    fdbCtrlSetStatus(`Aging 적용 완료 (Period=${ap}ns, Thr=${at}×100ms)`, 'ok');
+  } catch (e) { fdbCtrlSetStatus(`오류: ${e.message}`, 'err'); }
+});
+
+// FDB Bucket Read (CMD=0x13)
+document.getElementById('fdbBucketReadBtn')?.addEventListener('click', async () => {
+  const out = document.getElementById('fdbBucketResult');
+  if (!out) return;
+  out.textContent = '읽는 중...'; out.style.color = 'var(--muted)';
+  try {
+    const bucketStr = (document.getElementById('fdbBucketNum')?.value || '0').trim();
+    const slotStr   = (document.getElementById('fdbSlotBitmap')?.value || '0x1').trim();
+    const bucket = parseInt(bucketStr, 10);
+    const slot   = slotStr.startsWith('0x') || slotStr.startsWith('0X')
+                     ? parseInt(slotStr, 16) : parseInt(slotStr, 10);
+    if (bucket < 0 || bucket > 1023) throw new Error('Bucket은 0~1023 범위입니다');
+    if (slot < 1 || slot > 0xF)     throw new Error('Slot bitmap은 0x1~0xF 범위입니다');
+
+    const bucketReg = ((slot & 0xF) << 16) | (bucket & 0x3FF);
+    await fdbRegWrite(FDB_OFF_MCU_BUCKET, bucketReg);
+    await fdbRegWrite(FDB_OFF_MCU_CMD,    0x13);      // CMD_READ_BUCKET
+
+    // Poll CMD_STATUS [0] = RD-MAC valid
+    await fdbPollStatus(0x1, FDB_OFF_CMD_STATUS, 1000);
+
+    const flags  = await fdbRegRead(FDB_OFF_RD_FLAGS);
+    const valid  = (flags & 0x8000) !== 0;
+    const isStatic = (flags & 0x4000) !== 0;
+    const timestamp = flags & 0x3FFF;
+
+    if (!valid) {
+      out.textContent = `Bucket ${bucket} / Slot 0x${slot.toString(16).toUpperCase()}: 슬롯 비어있음 (Valid 비트 = 0)`;
+      out.style.color = 'var(--warn)';
+      return;
+    }
+
+    const mac0    = await fdbRegRead(FDB_OFF_RD_MAC0);
+    const mac1    = await fdbRegRead(FDB_OFF_RD_MAC1);
+    const mac2    = await fdbRegRead(FDB_OFF_RD_MAC2);
+    const rdPort  = await fdbRegRead(FDB_OFF_RD_PORT);
+    const rdBkt   = await fdbRegRead(FDB_OFF_RD_BUCKET);
+
+    const macStr  = formatMacFromWords(mac2 & 0xFFFF, mac1 & 0xFFFF, mac0 & 0xFFFF);
+    const port    = rdPort & 0x1FF;
+    const rdBucket = rdBkt & 0x3FF;
+    const rdSlot  = (rdBkt >>> 12) & 0xF;
+
+    out.textContent = [
+      `Bucket    : ${rdBucket}`,
+      `Slot      : 0x${rdSlot.toString(16).toUpperCase()}`,
+      `MAC       : ${macStr}`,
+      `Port      : ${port}`,
+      `Type      : ${isStatic ? 'Static' : 'Dynamic'}`,
+      `Timestamp : ${timestamp}`,
+      `Flags raw : 0x${flags.toString(16).toUpperCase().padStart(4,'0')}`
+    ].join('\n');
+    out.style.color = 'var(--accent)';
+  } catch (e) { out.textContent = `오류: ${e.message}`; out.style.color = '#b91c1c'; }
+});
+
 function fdbParams(requireMac = true) {
   const mac = (document.getElementById('fdbMac')?.value || '').trim();
   if (requireMac && !MAC_RE.test(mac)) throw new Error(`잘못된 MAC 주소: "${mac}" (예: AA:BB:CC:DD:EE:FF)`);
@@ -3786,7 +4063,7 @@ function fdbParams(requireMac = true) {
     mac,
     vlanValid: document.getElementById('fdbVlanValid')?.checked || false,
     vlanId:    Number(document.getElementById('fdbVlanId')?.value  || 0),
-    port:      Number(document.getElementById('fdbPort')?.value    || 1)
+    port:      Number(document.getElementById('fdbPort')?.value    || 0)
   };
 }
 

@@ -812,9 +812,60 @@
         <!-- ── Register View ─────────────────────────────────── -->
         <section id="registerView" class="htSubView">
           <section class="workPane">
-            <div class="sectionTitle">Register Read / Write</div>
+            <div class="sectionTitle">Register</div>
             <div id="regStatus" class="muted" style="font-size:.85rem;">상태 불러오는 중...</div>
 
+            <!-- ── System Control Panel ── -->
+            <div class="simpleCard sysCtrlCard">
+              <div class="sysCtrlHead">
+                <strong>System Control</strong>
+                <div class="sysCtrlHeadRight">
+                  <label style="font-size:.8rem;display:flex;align-items:center;gap:.5rem;">
+                    Base Address
+                    <input id="regBaseAddress" class="monoInput" value="0x44A00000" style="width:130px;" autocomplete="off">
+                  </label>
+                  <button id="regReadAllBtn" class="primaryAction sysCtrlReadAll">Read All</button>
+                  <button id="regLoadDefaultsBtn" class="ghostBtn">Load Defaults</button>
+                </div>
+              </div>
+              <div id="regVersionDisplay" class="sysCtrlVersion">—</div>
+
+              <!-- Port Enable -->
+              <div class="sysCtrlSection">
+                <div class="sysCtrlSectionLabel">Port Enable</div>
+                <div class="sysCtrlPortRow">
+                  <label class="sysCtrlCheck"><input id="regP0" type="checkbox" checked><span>P0</span></label>
+                  <label class="sysCtrlCheck"><input id="regP1" type="checkbox" checked><span>P1</span></label>
+                  <label class="sysCtrlCheck"><input id="regP2" type="checkbox" checked><span>P2</span></label>
+                  <label class="sysCtrlCheck"><input id="regP3" type="checkbox" checked><span>P3</span></label>
+                  <label class="sysCtrlCheck"><input id="regP4" type="checkbox" checked><span>P4</span></label>
+                  <label class="sysCtrlCheck"><input id="regP5" type="checkbox" checked><span>P5</span></label>
+                  <label class="sysCtrlCheck"><input id="regP6" type="checkbox" checked><span>P6</span></label>
+                  <label class="sysCtrlCheck"><input id="regP7" type="checkbox" checked><span>P7</span></label>
+                  <span class="sysCtrlSep"></span>
+                  <label class="sysCtrlCheck sysCtrlCheckTsgw"><input id="regTsgwEnable" type="checkbox" checked><span>TSGW Enable</span></label>
+                  <button id="regApplyEnableBtn" class="ghostBtn sysCtrlApplyBtn">Apply Enable</button>
+                </div>
+              </div>
+
+              <!-- AHB Wait -->
+              <div class="sysCtrlSection">
+                <div class="sysCtrlSectionLabel">AHB Host I/F</div>
+                <div class="sysCtrlAhbRow">
+                  <label class="sysCtrlNumLabel">WR Wait (0–15)
+                    <input id="regAhbWrWait" class="monoInput" type="number" min="0" max="15" value="15" style="width:70px;">
+                  </label>
+                  <label class="sysCtrlNumLabel">RD Wait (0–15)
+                    <input id="regAhbRdWait" class="monoInput" type="number" min="0" max="15" value="15" style="width:70px;">
+                  </label>
+                  <button id="regApplyAhbBtn" class="ghostBtn sysCtrlApplyBtn">Apply AHB</button>
+                </div>
+              </div>
+
+              <div id="regSysCtrlStatus" class="sysCtrlStatus"></div>
+            </div>
+
+            <!-- ── Register Read / Write ── -->
             <div class="simpleCardRow">
               <!-- Read -->
               <div class="simpleCard">
@@ -854,8 +905,63 @@
           <section class="workPane">
             <div class="sectionTitle">FDB (Forwarding Database)</div>
 
+            <!-- ── FDB Control Panel ── -->
+            <div class="simpleCard fdbCtrlCard">
+              <div class="sysCtrlHead">
+                <strong>FDB Control</strong>
+                <div class="sysCtrlHeadRight">
+                  <button id="fdbReadStatusBtn" class="primaryAction sysCtrlReadAll">Read Status</button>
+                  <button id="fdbLoadDefaultsBtn" class="ghostBtn">FDB Load Defaults</button>
+                </div>
+              </div>
+              <div id="fdbVersionDisplay" class="sysCtrlVersion">—</div>
+
+              <!-- Enable flags -->
+              <div class="sysCtrlSection">
+                <div class="sysCtrlSectionLabel">Enable Flags (0xA0C)</div>
+                <div class="sysCtrlPortRow">
+                  <label class="sysCtrlCheck"><input id="fdbAgeScanEnable" type="checkbox"><span>AgeScan [bit4]</span></label>
+                  <label class="sysCtrlCheck"><input id="fdbLearningEnable" type="checkbox"><span>Learning [bit1]</span></label>
+                  <label class="sysCtrlCheck"><input id="fdbLookupEnable" type="checkbox"><span>Lookup [bit0]</span></label>
+                  <button id="fdbApplyEnableBtn" class="ghostBtn sysCtrlApplyBtn">Apply Enable</button>
+                </div>
+              </div>
+
+              <!-- Age / Threshold -->
+              <div class="sysCtrlSection">
+                <div class="sysCtrlSectionLabel">Aging</div>
+                <div class="sysCtrlAhbRow">
+                  <label class="sysCtrlNumLabel">Age Period (ns) <small class="muted">0xA10</small>
+                    <input id="fdbAgePeriodNs" class="monoInput" type="number" min="0" value="0" style="width:120px;">
+                  </label>
+                  <label class="sysCtrlNumLabel">Aging Threshold (×100ms) <small class="muted">0xA14</small>
+                    <input id="fdbAgingThr" class="monoInput" type="number" min="0" value="0" style="width:120px;">
+                  </label>
+                  <button id="fdbApplyAgingBtn" class="ghostBtn sysCtrlApplyBtn">Apply Aging</button>
+                </div>
+              </div>
+
+              <div id="fdbCtrlStatus" class="sysCtrlStatus"></div>
+            </div>
+
+            <!-- ── FDB Bucket Read ── -->
             <div class="simpleCard">
-              <strong>공통 입력</strong>
+              <strong>Bucket Read (CMD=0x13)</strong>
+              <div class="sysCtrlAhbRow" style="align-items:flex-end;">
+                <label class="sysCtrlNumLabel">Bucket (0–1023)
+                  <input id="fdbBucketNum" class="monoInput" type="number" min="0" max="1023" value="0" style="width:100px;">
+                </label>
+                <label class="sysCtrlNumLabel">Slot bitmap (0x1–0xF)
+                  <input id="fdbSlotBitmap" class="monoInput" placeholder="0x1" style="width:80px;" autocomplete="off">
+                </label>
+                <button id="fdbBucketReadBtn" class="primaryAction">Bucket Read</button>
+              </div>
+              <div id="fdbBucketResult" class="simpleResult">버킷 읽기 결과가 여기 표시됩니다.</div>
+            </div>
+
+            <!-- ── Hash Read / Write / Delete / Flush ── -->
+            <div class="simpleCard">
+              <strong>Hash Lookup (MAC + VLAN)</strong>
               <div class="simpleCardRow cols3" style="align-items:end;">
                 <label style="font-size:.8rem;display:flex;flex-direction:column;gap:.4rem;">
                   MAC Address
@@ -871,12 +977,12 @@
               </div>
               <label style="font-size:.8rem;display:flex;flex-direction:column;gap:.4rem;max-width:120px;">
                 Port <small class="muted">(write 전용)</small>
-                <input id="fdbPort" class="monoInput" placeholder="1" type="number" min="1" max="8">
+                <input id="fdbPort" class="monoInput" placeholder="1" type="number" min="0" max="511">
               </label>
               <div class="simpleCardActions">
-                <button id="fdbReadBtn"   class="primaryAction">Read</button>
-                <button id="fdbWriteBtn"  class="primaryAction">Write</button>
-                <button id="fdbDeleteBtn" class="primaryAction dangerAction">Delete</button>
+                <button id="fdbReadBtn"   class="primaryAction">Hash Read</button>
+                <button id="fdbWriteBtn"  class="primaryAction">Hash Write</button>
+                <button id="fdbDeleteBtn" class="primaryAction dangerAction">Hash Delete</button>
                 <button id="fdbFlushBtn"  class="primaryAction dangerAction">Flush All</button>
               </div>
             </div>

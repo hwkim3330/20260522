@@ -2866,6 +2866,12 @@ body:not(.controlMode) .linkStrip { display: none; }
   padding: 1.5rem;
 }
 
+/* Register and FDB workpanes need extra width for System Control panels */
+#registerView .workPane,
+#fdbView .workPane {
+  max-width: 1100px;
+}
+
 /* Monospace input used in Register / FDB tabs */
 .monoInput {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -3238,3 +3244,149 @@ body:not(.controlMode) .linkStrip { display: none; }
     flex-wrap: wrap;
   }
 }
+
+/* ── System Control Card ── */
+.sysCtrlCard,
+.fdbCtrlCard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sysCtrlHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.sysCtrlHead strong {
+  font-size: 0.85rem;
+  color: var(--accent-strong);
+}
+
+.sysCtrlHeadRight {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.sysCtrlReadAll {
+  min-height: 30px !important;
+  padding: 0 12px !important;
+  font-size: 0.82rem !important;
+}
+
+.sysCtrlVersion {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  background: var(--soft);
+  border-radius: 4px;
+  min-height: 1.6rem;
+}
+
+.sysCtrlSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.sysCtrlSectionLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sysCtrlPortRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+}
+
+.sysCtrlCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.sysCtrlCheck input[type=checkbox] {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sysCtrlCheck:hover {
+  background: var(--soft);
+  border-color: var(--accent);
+}
+
+.sysCtrlCheckTsgw {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.sysCtrlSep {
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+.sysCtrlAhbRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.8rem;
+}
+
+.sysCtrlNumLabel {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 600;
+  gap: 0.3rem;
+}
+
+.sysCtrlApplyBtn {
+  min-height: 30px !important;
+  padding: 0 12px !important;
+  font-size: 0.82rem !important;
+  align-self: flex-end;
+}
+
+.sysCtrlStatus {
+  font-size: 0.82rem;
+  min-height: 1.2rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  transition: color 0.15s;
+}
+
+.sysCtrlStatus.sysCtrlOk  { color: var(--ok); }
+.sysCtrlStatus.sysCtrlErr { color: #b91c1c; }
+.sysCtrlStatus.sysCtrlWarn { color: var(--warn); }
