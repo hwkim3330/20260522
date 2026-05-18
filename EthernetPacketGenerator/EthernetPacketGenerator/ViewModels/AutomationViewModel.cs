@@ -103,6 +103,13 @@ public class AutomationViewModel : ViewModelBase
     /// <summary>외부 HTTP API (GET /api/auto/results) 에서 호출 — UI 스레드에서 실행됨.</summary>
     public List<Models.PacketFlowAutoTestRow> GetResultsSnapshot() => AutoTestRows.ToList();
 
+    /// <summary>외부 HTTP API (POST /api/auto/stop) 에서 호출 — UI 스레드에서 실행됨.</summary>
+    public void StopTest()
+    {
+        if (_pfm.StopMonitorCommand.CanExecute(null))
+            _pfm.StopMonitorCommand.Execute(null);
+    }
+
     private async Task RunWithStatusAsync(string testName, Func<Task> action)
     {
         StatusText = $"Running: {testName}...";

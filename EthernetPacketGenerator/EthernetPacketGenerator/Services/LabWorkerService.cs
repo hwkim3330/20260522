@@ -263,6 +263,7 @@ public class LabWorkerService : IDisposable
             "autorun"        => await AutoRunAsync(payload),
             "autostatus"     => await AutoStatusAsync(),
             "autoresults"    => await AutoResultsAsync(),
+            "autostop"       => await AutoStopAsync(),
             "appstatus"      => await AppStatusAsync(),
             "testcasesstatus"       => await TestCasesStatusAsync(),
             "testcasesaddgroup"     => await TestCasesAddGroupAsync(payload),
@@ -357,16 +358,22 @@ public class LabWorkerService : IDisposable
             foreach (var ua in nic.GetIPProperties().UnicastAddresses)
             {
                 if (ua.Address.AddressFamily == AddressFamily.InterNetwork)
-                    addrs.Add(ua.Address.ToString());
+                    addrs.Add(new JsonObject
+                    {
+                        ["local"]     = ua.Address.ToString(),
+                        ["prefixlen"] = ua.PrefixLength
+                    });
             }
 
             list.Add(new JsonObject
             {
                 ["name"]  = nic.Name,
+                ["key"]   = nic.Name,
                 ["mac"]   = macStr,
                 ["state"] = nic.OperationalStatus == OperationalStatus.Up ? "up" : "down",
                 ["mtu"]   = nic.GetIPProperties().GetIPv4Properties()?.Mtu ?? 0,
-                ["ipv4"]  = addrs
+                ["ipv4"]  = addrs,
+                ["description"] = nic.Description
             });
         }
 
@@ -496,12 +503,29 @@ public class LabWorkerService : IDisposable
     // Command: status
     // =========================================================================
 
-    private JsonObject GetStatus() => new()
+    private JsonObject GetStatus()
     {
-        ["workerId"]     = _workerId,
-        ["capturing"]    = _isCapturing,
-        ["captureCount"] = _captureBuffer.Count
-    };
+        var nics = NetworkInterface.GetAllNetworkInterfaces();
+        var captureIfaceNames = new JsonArray();
+        foreach (var dev in _captureDevices)
+        {
+            var mac = dev.MacAddress?.GetAddressBytes();
+            if (mac?.Length == 6)
+            {
+                var nic = nics.FirstOrDefault(n => n.GetPhysicalAddress().GetAddressBytes().SequenceEqual(mac));
+                if (nic != null) captureIfaceNames.Add(nic.Name);
+                else             captureIfaceNames.Add(dev.Name);
+            }
+            else captureIfaceNames.Add(dev.Name);
+        }
+        return new JsonObject
+        {
+            ["workerId"]          = _workerId,
+            ["capturing"]         = _isCapturing,
+            ["captureCount"]      = _captureBuffer.Count,
+            ["captureInterfaces"] = captureIfaceNames
+        };
+    }
 
     // =========================================================================
     // Command: startcapture
@@ -987,6 +1011,12 @@ public class LabWorkerService : IDisposable
         var rows = await DispatchToUiAsync(() => RequireAutomationVm().GetResultsSnapshot());
         var arr  = JsonNode.Parse(JsonSerializer.Serialize(rows, _jsonOpts))?.AsArray() ?? new JsonArray();
         return new JsonObject { ["rows"] = arr };
+    }
+
+    private async Task<JsonObject> AutoStopAsync()
+    {
+        await DispatchToUiAsync<bool>(() => { RequireAutomationVm().StopTest(); return true; });
+        return new JsonObject { ["ok"] = true };
     }
 
     // =========================================================================
