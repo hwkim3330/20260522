@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-05-18T08:11:04.063Z",
+  "generatedAt": "2026-05-19T01:06:56.762Z",
   "local": "http://localhost:8080",
   "peer": "http://172.31.51.213:8080",
   "count": 5,
-  "trials": 5,
-  "measurementRetries": 2,
+  "trials": 3,
+  "measurementRetries": 3,
   "results": [
     {
       "direction": "Local enp1s0f1 -> Peer 이더넷 2",
@@ -19,7 +19,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3556,
+      "elapsedMs": 3690,
       "byIface": {
         "이더넷 2": 5
       },
@@ -38,7 +38,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3299,
+      "elapsedMs": 3314,
       "byIface": {
         "이더넷": 5
       },
@@ -57,7 +57,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 2925,
+      "elapsedMs": 3480,
       "byIface": {
         "enp1s0f1": 5
       },
@@ -76,7 +76,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 2984,
+      "elapsedMs": 3442,
       "byIface": {
         "enp1s0f3": 5
       },
@@ -95,7 +95,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3229,
+      "elapsedMs": 3212,
       "byIface": {
         "이더넷 2": 5
       },
@@ -114,7 +114,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3170,
+      "elapsedMs": 3789,
       "byIface": {
         "이더넷": 5
       },
@@ -133,7 +133,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3118,
+      "elapsedMs": 3706,
       "byIface": {
         "enp1s0f1": 5
       },
@@ -152,7 +152,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3131,
+      "elapsedMs": 3700,
       "byIface": {
         "enp1s0f3": 5
       },
@@ -171,7 +171,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3188,
+      "elapsedMs": 3692,
       "byIface": {
         "이더넷 2": 5
       },
@@ -190,7 +190,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3207,
+      "elapsedMs": 3625,
       "byIface": {
         "이더넷": 5
       },
@@ -209,7 +209,7 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 2922,
+      "elapsedMs": 3497,
       "byIface": {
         "enp1s0f1": 5
       },
@@ -228,168 +228,22 @@
       "sendOk": true,
       "captureOk": true,
       "measurementAttempt": 1,
-      "elapsedMs": 3343,
+      "elapsedMs": 3554,
       "byIface": {
         "enp1s0f3": 5
       },
       "error": ""
-    },
-    {
-      "direction": "Local enp1s0f1 -> Peer 이더넷 2",
-      "trial": 4,
-      "sent": 5,
-      "expected": 5,
-      "matched": 5,
-      "captureRows": 5,
-      "lossPct": 0,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": true,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 3210,
-      "byIface": {
-        "이더넷 2": 5
-      },
-      "error": ""
-    },
-    {
-      "direction": "Local enp1s0f3 -> Peer 이더넷",
-      "trial": 4,
-      "sent": 5,
-      "expected": 5,
-      "matched": 5,
-      "captureRows": 5,
-      "lossPct": 0,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": true,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 3745,
-      "byIface": {
-        "이더넷": 5
-      },
-      "error": ""
-    },
-    {
-      "direction": "Peer 이더넷 2 -> Local enp1s0f1",
-      "trial": 4,
-      "sent": 5,
-      "expected": 5,
-      "matched": 5,
-      "captureRows": 5,
-      "lossPct": 0,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": true,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 2892,
-      "byIface": {
-        "enp1s0f1": 5
-      },
-      "error": ""
-    },
-    {
-      "direction": "Peer 이더넷 -> Local enp1s0f3",
-      "trial": 4,
-      "sent": 5,
-      "expected": 5,
-      "matched": 5,
-      "captureRows": 5,
-      "lossPct": 0,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": true,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 2841,
-      "byIface": {
-        "enp1s0f3": 5
-      },
-      "error": ""
-    },
-    {
-      "direction": "Local enp1s0f1 -> Peer 이더넷 2",
-      "trial": 5,
-      "sent": 5,
-      "expected": 5,
-      "matched": 5,
-      "captureRows": 5,
-      "lossPct": 0,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": true,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 3329,
-      "byIface": {
-        "이더넷 2": 5
-      },
-      "error": ""
-    },
-    {
-      "direction": "Local enp1s0f3 -> Peer 이더넷",
-      "trial": 5,
-      "sent": 5,
-      "expected": 5,
-      "matched": 0,
-      "captureRows": 0,
-      "lossPct": 100,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": true,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 3215,
-      "byIface": {},
-      "error": ""
-    },
-    {
-      "direction": "Peer 이더넷 2 -> Local enp1s0f1",
-      "trial": 5,
-      "sent": 0,
-      "expected": 5,
-      "matched": 0,
-      "captureRows": 0,
-      "lossPct": 100,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": false,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 2547,
-      "byIface": {},
-      "error": "cap npm not installed (run: npm install cap)"
-    },
-    {
-      "direction": "Peer 이더넷 -> Local enp1s0f3",
-      "trial": 5,
-      "sent": 0,
-      "expected": 5,
-      "matched": 0,
-      "captureRows": 0,
-      "lossPct": 100,
-      "startOk": true,
-      "captureStartAttempts": 1,
-      "sendOk": false,
-      "captureOk": true,
-      "measurementAttempt": 1,
-      "elapsedMs": 2619,
-      "byIface": {},
-      "error": "cap npm not installed (run: npm install cap)"
     }
   ],
   "summary": [
     {
       "direction": "Local enp1s0f1 -> Peer 이더넷 2",
-      "sent": 25,
-      "matched": 25,
+      "sent": 15,
+      "matched": 15,
       "rxPct": 100,
       "lossPct": 0,
       "apiErrors": 0,
-      "perfectTrials": 5,
+      "perfectTrials": 3,
       "partialTrials": 0,
       "zeroTrials": 0,
       "verdict": "PASS",
@@ -407,7 +261,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3556,
+          "elapsedMs": 3690,
           "byIface": {
             "이더넷 2": 5
           },
@@ -426,7 +280,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3229,
+          "elapsedMs": 3212,
           "byIface": {
             "이더넷 2": 5
           },
@@ -445,45 +299,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3188,
-          "byIface": {
-            "이더넷 2": 5
-          },
-          "error": ""
-        },
-        {
-          "direction": "Local enp1s0f1 -> Peer 이더넷 2",
-          "trial": 4,
-          "sent": 5,
-          "expected": 5,
-          "matched": 5,
-          "captureRows": 5,
-          "lossPct": 0,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": true,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 3210,
-          "byIface": {
-            "이더넷 2": 5
-          },
-          "error": ""
-        },
-        {
-          "direction": "Local enp1s0f1 -> Peer 이더넷 2",
-          "trial": 5,
-          "sent": 5,
-          "expected": 5,
-          "matched": 5,
-          "captureRows": 5,
-          "lossPct": 0,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": true,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 3329,
+          "elapsedMs": 3692,
           "byIface": {
             "이더넷 2": 5
           },
@@ -493,15 +309,15 @@
     },
     {
       "direction": "Local enp1s0f3 -> Peer 이더넷",
-      "sent": 25,
-      "matched": 20,
-      "rxPct": 80,
-      "lossPct": 20,
+      "sent": 15,
+      "matched": 15,
+      "rxPct": 100,
+      "lossPct": 0,
       "apiErrors": 0,
-      "perfectTrials": 4,
+      "perfectTrials": 3,
       "partialTrials": 0,
-      "zeroTrials": 1,
-      "verdict": "CAPTURE UNDERCOUNT",
+      "zeroTrials": 0,
+      "verdict": "PASS",
       "trials": [
         {
           "direction": "Local enp1s0f3 -> Peer 이더넷",
@@ -516,7 +332,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3299,
+          "elapsedMs": 3314,
           "byIface": {
             "이더넷": 5
           },
@@ -535,7 +351,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3170,
+          "elapsedMs": 3789,
           "byIface": {
             "이더넷": 5
           },
@@ -554,61 +370,25 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3207,
+          "elapsedMs": 3625,
           "byIface": {
             "이더넷": 5
           },
-          "error": ""
-        },
-        {
-          "direction": "Local enp1s0f3 -> Peer 이더넷",
-          "trial": 4,
-          "sent": 5,
-          "expected": 5,
-          "matched": 5,
-          "captureRows": 5,
-          "lossPct": 0,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": true,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 3745,
-          "byIface": {
-            "이더넷": 5
-          },
-          "error": ""
-        },
-        {
-          "direction": "Local enp1s0f3 -> Peer 이더넷",
-          "trial": 5,
-          "sent": 5,
-          "expected": 5,
-          "matched": 0,
-          "captureRows": 0,
-          "lossPct": 100,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": true,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 3215,
-          "byIface": {},
           "error": ""
         }
       ]
     },
     {
       "direction": "Peer 이더넷 2 -> Local enp1s0f1",
-      "sent": 25,
-      "matched": 20,
-      "rxPct": 80,
-      "lossPct": 20,
-      "apiErrors": 1,
-      "perfectTrials": 4,
+      "sent": 15,
+      "matched": 15,
+      "rxPct": 100,
+      "lossPct": 0,
+      "apiErrors": 0,
+      "perfectTrials": 3,
       "partialTrials": 0,
-      "zeroTrials": 1,
-      "verdict": "MEASUREMENT UNSTABLE",
+      "zeroTrials": 0,
+      "verdict": "PASS",
       "trials": [
         {
           "direction": "Peer 이더넷 2 -> Local enp1s0f1",
@@ -623,7 +403,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 2925,
+          "elapsedMs": 3480,
           "byIface": {
             "enp1s0f1": 5
           },
@@ -642,7 +422,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3118,
+          "elapsedMs": 3706,
           "byIface": {
             "enp1s0f1": 5
           },
@@ -661,61 +441,25 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 2922,
+          "elapsedMs": 3497,
           "byIface": {
             "enp1s0f1": 5
           },
           "error": ""
-        },
-        {
-          "direction": "Peer 이더넷 2 -> Local enp1s0f1",
-          "trial": 4,
-          "sent": 5,
-          "expected": 5,
-          "matched": 5,
-          "captureRows": 5,
-          "lossPct": 0,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": true,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 2892,
-          "byIface": {
-            "enp1s0f1": 5
-          },
-          "error": ""
-        },
-        {
-          "direction": "Peer 이더넷 2 -> Local enp1s0f1",
-          "trial": 5,
-          "sent": 0,
-          "expected": 5,
-          "matched": 0,
-          "captureRows": 0,
-          "lossPct": 100,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": false,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 2547,
-          "byIface": {},
-          "error": "cap npm not installed (run: npm install cap)"
         }
       ]
     },
     {
       "direction": "Peer 이더넷 -> Local enp1s0f3",
-      "sent": 25,
-      "matched": 20,
-      "rxPct": 80,
-      "lossPct": 20,
-      "apiErrors": 1,
-      "perfectTrials": 4,
+      "sent": 15,
+      "matched": 15,
+      "rxPct": 100,
+      "lossPct": 0,
+      "apiErrors": 0,
+      "perfectTrials": 3,
       "partialTrials": 0,
-      "zeroTrials": 1,
-      "verdict": "MEASUREMENT UNSTABLE",
+      "zeroTrials": 0,
+      "verdict": "PASS",
       "trials": [
         {
           "direction": "Peer 이더넷 -> Local enp1s0f3",
@@ -730,7 +474,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 2984,
+          "elapsedMs": 3442,
           "byIface": {
             "enp1s0f3": 5
           },
@@ -749,7 +493,7 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3131,
+          "elapsedMs": 3700,
           "byIface": {
             "enp1s0f3": 5
           },
@@ -768,47 +512,11 @@
           "sendOk": true,
           "captureOk": true,
           "measurementAttempt": 1,
-          "elapsedMs": 3343,
+          "elapsedMs": 3554,
           "byIface": {
             "enp1s0f3": 5
           },
           "error": ""
-        },
-        {
-          "direction": "Peer 이더넷 -> Local enp1s0f3",
-          "trial": 4,
-          "sent": 5,
-          "expected": 5,
-          "matched": 5,
-          "captureRows": 5,
-          "lossPct": 0,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": true,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 2841,
-          "byIface": {
-            "enp1s0f3": 5
-          },
-          "error": ""
-        },
-        {
-          "direction": "Peer 이더넷 -> Local enp1s0f3",
-          "trial": 5,
-          "sent": 0,
-          "expected": 5,
-          "matched": 0,
-          "captureRows": 0,
-          "lossPct": 100,
-          "startOk": true,
-          "captureStartAttempts": 1,
-          "sendOk": false,
-          "captureOk": true,
-          "measurementAttempt": 1,
-          "elapsedMs": 2619,
-          "byIface": {},
-          "error": "cap npm not installed (run: npm install cap)"
         }
       ]
     }
