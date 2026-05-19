@@ -60,10 +60,11 @@ router.post('/start', async (req, res) => {
       signal: AbortSignal.timeout(6000)
     }).catch(() => {});
 
+    const bpfFilter = (req.body?.bpfFilter || '').trim();
     const resp = await nodeFetch(`${base}/api/capture/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ interfaces }),
+      body: JSON.stringify({ interfaces, ...(bpfFilter ? { bpfFilter } : {}) }),
       signal: AbortSignal.timeout(12000)  // extra time for the 350ms stabilize wait
     });
     const data = await resp.json().catch(() => ({}));

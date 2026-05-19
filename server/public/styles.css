@@ -3817,3 +3817,72 @@ body:not(.controlMode) .linkStrip { display: none; }
   margin-bottom: 8px;
 }
 .caTimelinePanel.hidden { display: none; }
+
+/* Throughput stats bar after Send */
+.sendStats {
+  font-size: .78rem;
+  color: var(--muted);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 10px;
+  margin-top: 6px;
+  letter-spacing: .02em;
+}
+.sendStats.hidden { display: none; }
+
+/* BPF filter row in Capture Address view */
+.caBpfRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.caBpfLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .78rem;
+  color: var(--muted);
+  flex: 1;
+}
+.caBpfInput {
+  flex: 1;
+  min-width: 200px;
+  max-width: 480px;
+  font-size: .82rem;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+}
+.caBpfInput:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.caBpfHint {
+  font-size: .72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Quick protocol filter chips */
+.caFilterChips {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.filterChip {
+  font-size: .72rem;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+  line-height: 1.4;
+}
+.filterChip:hover { border-color: var(--accent); color: var(--accent); }
+.filterChip.active { background: var(--accent); color: #fff; border-color: var(--accent); }

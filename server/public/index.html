@@ -268,6 +268,7 @@
                 <button id="send" class="primaryAction">Send Packet</button>
                 <button id="build" class="ghostBtn small" title="Preview is auto-updated as you edit; click to force a rebuild">↻ Refresh preview</button>
               </div>
+              <div id="sendStats" class="sendStats hidden"></div>
             </div>
 
             <section class="sequencePanel">
@@ -372,6 +373,14 @@
             </div>
           </div>
 
+          <!-- Row 1.5: BPF capture filter -->
+          <div class="caBpfRow">
+            <label class="caBpfLabel">BPF Filter
+              <input id="caBpfFilter" class="caBpfInput" placeholder="e.g. tcp port 80  /  udp  /  arp  /  icmp" autocomplete="off" spellcheck="false">
+            </label>
+            <span class="caBpfHint">applied at capture start on peer</span>
+          </div>
+
           <!-- Row 2: Target address + PASS/FAIL check -->
           <div class="caAddrRow">
             <label class="caAddrLabel">Target Address
@@ -394,6 +403,13 @@
             <div class="caTableHeader">
               <span id="caPacketCount" class="muted">0 packets</span>
               <input id="caDisplayFilter" class="caDisplayFilter" placeholder="display filter: mac: / ip: / tcp / udp…" autocomplete="off">
+              <div class="caFilterChips">
+                <button class="filterChip" data-filter="tcp">TCP</button>
+                <button class="filterChip" data-filter="udp">UDP</button>
+                <button class="filterChip" data-filter="icmp">ICMP</button>
+                <button class="filterChip" data-filter="arp">ARP</button>
+                <button class="filterChip" data-filter="">All</button>
+              </div>
             </div>
             <div class="caPacketList" id="caPacketList">
               <table>

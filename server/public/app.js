@@ -1277,15 +1277,28 @@ async function send() {
   if (err) { setStatus(err, true); toast(err, 'fail'); return; }
   const ifaces = selectedInterfaceNames();
   if (!ifaces.length) { setStatus('No interface selected', true); return; }
+  const statsEl = $('sendStats');
+  if (statsEl) statsEl.classList.add('hidden');
   if (ifaces.length === 1) {
     setStatus('Sending packet...');
+    const t0 = performance.now();
     const result = await api('/api/send', { method: 'POST', body: JSON.stringify(getProfile()) });
+    const elapsed = (performance.now() - t0) / 1000;
     showResult(result);
-    setStatus(`Sent ${result.stdout.framesSent} frame(s), ${result.stdout.bytesSent} bytes on ${ifaces[0]}`);
+    const frames = Number(result.stdout?.framesSent || 0);
+    const bytes  = Number(result.stdout?.bytesSent  || 0);
+    const pps  = elapsed > 0 ? (frames / elapsed).toFixed(1) : '—';
+    const mbps = elapsed > 0 ? ((bytes * 8) / elapsed / 1e6).toFixed(3) : '—';
+    setStatus(`Sent ${frames} frame(s), ${bytes} bytes on ${ifaces[0]}`);
+    if (statsEl) {
+      statsEl.textContent = `${frames} frames · ${bytes} B · ${pps} pps · ${mbps} Mbps · ${elapsed.toFixed(3)} s`;
+      statsEl.classList.remove('hidden');
+    }
     return;
   }
   // Multi-interface fan-out: each NIC sends independently, with its own srcMac.
   setStatus(`Sending on ${ifaces.length} interface(s)...`);
+  const t0 = performance.now();
   let totalFrames = 0, totalBytes = 0;
   const errors = [];
   for (const name of ifaces) {
@@ -1294,14 +1307,21 @@ async function send() {
     try {
       const r = await api('/api/send', { method: 'POST', body: JSON.stringify(profile) });
       totalFrames += Number(r.stdout?.framesSent || 0);
-      totalBytes += Number(r.stdout?.bytesSent || 0);
+      totalBytes  += Number(r.stdout?.bytesSent  || 0);
       showResult(r);
     } catch (e) {
       errors.push(`${name}: ${e.message}`);
     }
   }
+  const elapsed = (performance.now() - t0) / 1000;
+  const pps  = elapsed > 0 ? (totalFrames / elapsed).toFixed(1) : '—';
+  const mbps = elapsed > 0 ? ((totalBytes * 8) / elapsed / 1e6).toFixed(3) : '—';
   if (errors.length) setStatus(`Sent ${totalFrames} frames across ${ifaces.length - errors.length}/${ifaces.length}; errors: ${errors.join('; ')}`, true);
   else setStatus(`Sent ${totalFrames} frames / ${totalBytes} bytes across ${ifaces.length} interfaces`);
+  if (statsEl) {
+    statsEl.textContent = `${totalFrames} frames · ${totalBytes} B · ${pps} pps · ${mbps} Mbps · ${elapsed.toFixed(3)} s`;
+    statsEl.classList.remove('hidden');
+  }
 }
 
 // `capture()` legacy function removed; use startCaptureStream / stopCaptureStream.
@@ -5334,9 +5354,10 @@ async function caStartCapture() {
 
   let startData;
   try {
+    const bpf = $('caBpfFilter')?.value?.trim();
     startData = await api('/api/remote-capture/start', {
       method: 'POST',
-      body: JSON.stringify({ peerUrl: caState.peerUrl, interfaces: caState.selectedIfaces })
+      body: JSON.stringify({ peerUrl: caState.peerUrl, interfaces: caState.selectedIfaces, ...(bpf ? { bpfFilter: bpf } : {}) })
     });
   } catch (err) {
     toast(`Capture start failed: ${err.message}`, 'fail');
@@ -5514,13 +5535,23 @@ async function caLoadWorkers() {
   // Display filter
   filterInput?.addEventListener('input', () => {
     caState.displayFilter = filterInput.value.trim();
-    // Re-render visible rows according to filter
     const allRows = document.querySelectorAll('#caRows tr');
     allRows.forEach((tr) => {
       const idx = Number(tr.dataset.idx);
       const pkt = caState.packets[idx];
       if (!pkt) return;
       tr.style.display = caPacketPassesFilter(pkt, caState.displayFilter) ? '' : 'none';
+    });
+    document.querySelectorAll('.filterChip').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.filter === caState.displayFilter);
+    });
+  });
+
+  // Quick filter chips
+  document.querySelectorAll('.filterChip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const f = btn.dataset.filter;
+      if (filterInput) { filterInput.value = f; filterInput.dispatchEvent(new Event('input')); }
     });
   });
 
