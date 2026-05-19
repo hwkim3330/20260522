@@ -152,8 +152,22 @@ function writeReport(report) {
   fs.writeFileSync(path.join(reportsDir, 'switch-deep-latest.json'), JSON.stringify(report, null, 2));
   const labels = report.summary.map((s) => s.direction);
   const rx = report.summary.map((s) => s.rxPct);
-  const loss = report.summary.map((s) => s.lossPct);
   const apiErrors = report.summary.map((s) => s.apiErrors);
+  const sentFrames = report.summary.map((s) => s.sent);
+  const matchedFrames = report.summary.map((s) => s.matched);
+  const capturedRows = report.summary.map((s) => s.trials.reduce((sum, t) => sum + t.captureRows, 0));
+  const avgElapsed = report.summary.map((s) => Math.round(s.trials.reduce((sum, t) => sum + t.elapsedMs, 0) / Math.max(1, s.trials.length)));
+  const trialNumbers = Array.from(new Set(report.results.map((r) => r.trial))).sort((a, b) => a - b);
+  const elapsedDatasets = report.summary.map((s, index) => ({
+    label: s.direction,
+    data: trialNumbers.map((trial) => {
+      const row = s.trials.find((t) => t.trial === trial);
+      return row ? row.elapsedMs : null;
+    }),
+    borderColor: ['#0f6f78', '#f59e0b', '#2563eb', '#16a34a'][index % 4],
+    backgroundColor: ['#0f6f78', '#f59e0b', '#2563eb', '#16a34a'][index % 4],
+    tension: 0.25
+  }));
   const verdictColor = (v) => ({
     PASS: '#12803a',
     'CAPTURE UNDERCOUNT': '#b9651a',
@@ -165,6 +179,9 @@ function writeReport(report) {
   const totalMatched = report.summary.reduce((sum, s) => sum + s.matched, 0);
   const stableDirections = report.summary.filter((s) => s.verdict === 'PASS').length;
   const undercountDirections = report.summary.filter((s) => s.verdict === 'CAPTURE UNDERCOUNT').length;
+  const allTrials = report.summary.flatMap((s) => s.trials);
+  const avgTrialMs = Math.round(allTrials.reduce((sum, t) => sum + t.elapsedMs, 0) / Math.max(1, allTrials.length));
+  const setupRetries = allTrials.reduce((sum, t) => sum + Math.max(0, (t.captureStartAttempts || 1) - 1), 0);
   const topologyPairs = [
     {
       port: 'P0-P1',
@@ -227,7 +244,7 @@ function writeReport(report) {
     .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:16px 0}
     .card,.chart,table,.note,.topology,.heatmap{background:white;border:1px solid #d9e2ea;border-radius:18px;box-shadow:0 4px 16px #0f172a10}
     .card{padding:14px}.card span{font-size:11px;color:#64748b;text-transform:uppercase;font-weight:800}.card strong{display:block;font-size:26px}
-    .charts{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}.chart{padding:16px}.chart h3,.topology h3,.heatmap h3{margin:0 0 10px}
+    .charts{display:grid;grid-template-columns:1fr 1fr;gap:16px}.chart{padding:16px}.chart h3,.topology h3,.heatmap h3{margin:0 0 10px}
     .note{padding:14px 16px;margin:16px 0;color:#334155}.note strong{color:#0f6f78}
     .topology{padding:16px;margin:16px 0}.topoGrid{display:grid;gap:12px}
     .topoLinkCard{display:grid;grid-template-columns:minmax(180px,1fr) minmax(280px,1.15fr) minmax(180px,1fr);gap:12px;align-items:center;border:1px solid #dbe7ef;border-radius:16px;padding:12px;background:linear-gradient(90deg,#f8fbfc,#fff)}
@@ -257,9 +274,9 @@ function writeReport(report) {
     <div class="cards">
       <div class="card"><span>Total Frames</span><strong>${totalSent}</strong></div>
       <div class="card"><span>Matched</span><strong>${totalMatched}</strong></div>
-      <div class="card"><span>Overall Marker RX</span><strong>${(100 * totalMatched / totalSent).toFixed(1)}%</strong></div>
       <div class="card"><span>Clean Directions</span><strong>${stableDirections}/${report.summary.length}</strong></div>
-      <div class="card"><span>Capture Undercount</span><strong>${undercountDirections}</strong></div>
+      <div class="card"><span>Avg Trial Runtime</span><strong>${avgTrialMs} ms</strong></div>
+      <div class="card"><span>Setup Retries</span><strong>${setupRetries}</strong></div>
     </div>
     <div class="topology">
       <h3>Physical 4-Port Switch Topology</h3>
@@ -267,19 +284,28 @@ function writeReport(report) {
     </div>
     <div class="note"><strong>Method:</strong> Each direction sends known-unicast UDP frames to the exact destination MAC, then captures only frames matching source and destination MAC on the expected receiving NIC. A retry is used only for measurement setup errors, not to inflate packet counts.</div>
     <div class="charts">
+      <div class="chart"><h3>Frame Accounting by Direction</h3><canvas id="accounting"></canvas></div>
       <div class="chart"><h3>Marker Receive Rate by Direction</h3><canvas id="rx"></canvas></div>
-      <div class="chart"><h3>API / Measurement Errors</h3><canvas id="api"></canvas></div>
+      <div class="chart"><h3>Trial Runtime Trend</h3><canvas id="elapsed"></canvas></div>
+      <div class="chart"><h3>Setup / API Health</h3><canvas id="api"></canvas></div>
     </div>
-    <div class="chart" style="margin-top:16px"><h3>Loss / Undercount Rate</h3><canvas id="loss"></canvas></div>
     <div class="heatmap"><h3>Trial Stability Heatmap</h3>${heatmap}</div>
     <table><thead><tr><th>Direction</th><th>Verdict</th><th>Matched</th><th>RX</th><th>API Errors</th><th>Trials</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="muted">Generated artifact: <code>/reports/switch-deep-latest.html</code> and <code>/reports/switch-deep-latest.json</code>.</p>
   </div>
   <script>
     const labels=${JSON.stringify(labels)};
+    new Chart(document.getElementById('accounting'),{type:'bar',data:{labels,datasets:[
+      {label:'Sent frames',data:${JSON.stringify(sentFrames)},backgroundColor:'#94a3b8'},
+      {label:'Marker matched',data:${JSON.stringify(matchedFrames)},backgroundColor:'#16a34a'},
+      {label:'Captured rows',data:${JSON.stringify(capturedRows)},backgroundColor:'#0f6f78'}
+    ]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
     new Chart(document.getElementById('rx'),{type:'bar',data:{labels,datasets:[{label:'RX %',data:${JSON.stringify(rx)},backgroundColor:'#0f6f78'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100}}}});
-    new Chart(document.getElementById('api'),{type:'bar',data:{labels,datasets:[{label:'API errors',data:${JSON.stringify(apiErrors)},backgroundColor:'#dc2626'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
-    new Chart(document.getElementById('loss'),{type:'bar',data:{labels,datasets:[{label:'Loss / undercount %',data:${JSON.stringify(loss)},backgroundColor:'#b9651a'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100}}}});
+    new Chart(document.getElementById('elapsed'),{type:'line',data:{labels:${JSON.stringify(trialNumbers.map((n) => `Trial ${n}`))},datasets:${JSON.stringify(elapsedDatasets)}},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:false,title:{display:true,text:'ms'}}}}});
+    new Chart(document.getElementById('api'),{type:'bar',data:{labels,datasets:[
+      {label:'API errors',data:${JSON.stringify(apiErrors)},backgroundColor:'#dc2626'},
+      {label:'Avg runtime ms',data:${JSON.stringify(avgElapsed)},backgroundColor:'#f59e0b',yAxisID:'y1'}
+    ]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,ticks:{precision:0}},y1:{position:'right',beginAtZero:true,grid:{drawOnChartArea:false},title:{display:true,text:'ms'}}}}});
   </script>
 </body>
 </html>`;
