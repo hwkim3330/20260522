@@ -5571,11 +5571,19 @@ async function caLoadWorkers() {
     const workers = data.workers || [];
     // Keep the placeholder option, rebuild the rest
     while (sel.options.length > 1) sel.remove(1);
-    // Add "localhost (local)" as convenience
-    const localOpt = document.createElement('option');
-    localOpt.value = 'http://localhost:8080';
-    localOpt.textContent = 'localhost:8080 (local)';
-    sel.appendChild(localOpt);
+    // Add self (this machine's URL from the browser's perspective)
+    const selfUrl = window.location.origin;
+    const selfOpt = document.createElement('option');
+    selfOpt.value = selfUrl;
+    selfOpt.textContent = `${selfUrl.replace('http://', '')} (self)`;
+    sel.appendChild(selfOpt);
+    // Add localhost alias if different from self
+    if (selfUrl !== 'http://localhost:8080') {
+      const localOpt = document.createElement('option');
+      localOpt.value = 'http://localhost:8080';
+      localOpt.textContent = 'localhost:8080 (local)';
+      sel.appendChild(localOpt);
+    }
     for (const w of workers) {
       const url = w.info?.url || w.info?.peerUrl || '';
       const label = w.info?.label || w.id || w.info?.hostname || url || w.id;
