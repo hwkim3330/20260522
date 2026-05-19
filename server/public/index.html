@@ -193,6 +193,14 @@
                 <input id="dstPort" type="number" min="1" max="65535">
               </label>
             </div>
+            <div id="tcpFlagsRow" class="tcpFlagsRow hidden">
+              <span class="flagsLabel">TCP Flags</span>
+              <label class="check"><input type="checkbox" id="tcpFlagSyn"> <span>SYN</span></label>
+              <label class="check"><input type="checkbox" id="tcpFlagAck"> <span>ACK</span></label>
+              <label class="check"><input type="checkbox" id="tcpFlagPsh"> <span>PSH</span></label>
+              <label class="check"><input type="checkbox" id="tcpFlagFin"> <span>FIN</span></label>
+              <label class="check"><input type="checkbox" id="tcpFlagRst"> <span>RST</span></label>
+            </div>
             <label class="check">
               <input id="vlanEnabled" type="checkbox">
               <span>802.1Q VLAN</span>
@@ -360,6 +368,7 @@
               <button id="caStartBtn" class="primaryAction wsStart" disabled>▶ Start Capture</button>
               <button id="caStopBtn" class="ghostBtn wsStop" disabled>■ Stop</button>
               <button id="caClearBtn" class="ghostBtn">Clear</button>
+              <button id="caExportBtn" class="ghostBtn" disabled title="Export captured packets as .pcap">⬇ PCAP</button>
             </div>
           </div>
 
@@ -372,7 +381,10 @@
             <span id="caResult" class="caResult"></span>
           </div>
 
-          <!-- Row 2.5: Protocol distribution chart -->
+          <!-- Row 2.5: Timeline + protocol charts -->
+          <div id="caTimelinePanel" class="caTimelinePanel hidden">
+            <div id="caTimelineChart" style="height:100px;width:100%"></div>
+          </div>
           <div id="caChartPanel" class="caChartPanel hidden">
             <div id="caProtoChart" style="height:160px;width:100%"></div>
           </div>

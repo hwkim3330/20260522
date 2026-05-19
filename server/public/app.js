@@ -115,6 +115,15 @@ function setProfile(profile) {
   autofillSenderFromPickedIface();
   $('srcPort').value = profile.udp?.srcPort || profile.tcp?.srcPort || 40000;
   $('dstPort').value = profile.udp?.dstPort || profile.tcp?.dstPort || 50000;
+  // Restore TCP flags if profile has explicit flags
+  const f = profile.tcp?.flags;
+  if (f !== undefined) {
+    if ($('tcpFlagSyn')) $('tcpFlagSyn').checked = !!(f & 0x02);
+    if ($('tcpFlagAck')) $('tcpFlagAck').checked = !!(f & 0x10);
+    if ($('tcpFlagPsh')) $('tcpFlagPsh').checked = !!(f & 0x08);
+    if ($('tcpFlagFin')) $('tcpFlagFin').checked = !!(f & 0x01);
+    if ($('tcpFlagRst')) $('tcpFlagRst').checked = !!(f & 0x04);
+  }
   $('payloadMode').value = payload.mode || 'text';
   $('payload').value = payload.data || payload.template || '';
   $('payloadSize').value = payload.size ?? '';
@@ -187,7 +196,12 @@ function getProfile() {
     profile.udp = { srcPort: Number($('srcPort').value), dstPort: Number($('dstPort').value) };
   } else if (protocol === 'tcp') {
     profile.ipv4 = { src: $('srcIp').value.trim(), dst: $('dstIp').value.trim(), ttl: 64 };
-    profile.tcp = { srcPort: Number($('srcPort').value), dstPort: Number($('dstPort').value) };
+    const tcpObj = { srcPort: Number($('srcPort').value), dstPort: Number($('dstPort').value) };
+    const syn = $('tcpFlagSyn')?.checked, ack = $('tcpFlagAck')?.checked;
+    const psh = $('tcpFlagPsh')?.checked, fin = $('tcpFlagFin')?.checked, rst = $('tcpFlagRst')?.checked;
+    if (syn || ack || psh || fin || rst)
+      tcpObj.flags = (syn ? 0x02 : 0) | (ack ? 0x10 : 0) | (psh ? 0x08 : 0) | (fin ? 0x01 : 0) | (rst ? 0x04 : 0);
+    profile.tcp = tcpObj;
   } else if (protocol === 'icmp') {
     profile.ipv4 = { src: $('srcIp').value.trim(), dst: $('dstIp').value.trim(), ttl: 64 };
     profile.icmp = { type: 8, code: 0, id: 8230, seq: 1 };
@@ -1244,7 +1258,7 @@ async function loadExamples() {
 
 function validateProfileFields() {
   const p = $('protocol').value;
-  if (p === 'arp' || p === 'udp' || p === 'icmp') {
+  if (p === 'arp' || p === 'udp' || p === 'icmp' || p === 'tcp') {
     if (!$('srcMac').value || !$('dstMac').value) return 'Source / Destination MAC is empty. Pick a NIC above to autofill Source, then type Destination MAC.';
     if (p !== 'arp' && (!$('srcIp').value || !$('dstIp').value)) return 'Source / Destination IP is empty.';
   }
@@ -2318,6 +2332,11 @@ $('refreshInterfaces').addEventListener('click', () => loadInterfaces().catch((e
   toastError(err);
 }));
 $('interfaceSelect').addEventListener('change', updateInterfaceInfo);
+$('protocol').addEventListener('change', () => {
+  const isTcp = $('protocol').value === 'tcp';
+  const row = $('tcpFlagsRow');
+  if (row) row.classList.toggle('hidden', !isTcp);
+});
 $('build').addEventListener('click', () => build().catch((err) => {
   toastError(err);
 }));
@@ -5132,6 +5151,34 @@ function caRenderIfaceList() {
   if (startBtn) startBtn.disabled = caState.selectedIfaces.length === 0;
 }
 
+// ─── Capture timeline chart (pps per second) ─────────────────────────────────
+function renderCaptureTimeline(packets) {
+  const panel = $('caTimelinePanel');
+  if (!packets.length) { if (panel) panel.classList.add('hidden'); return; }
+  if (panel) panel.classList.remove('hidden');
+  const chart = getChart('caTimelineChart');
+  if (!chart) return;
+  const minTs = Math.floor(packets[0].timestamp || 0);
+  const buckets = {};
+  for (const p of packets) {
+    const s = Math.max(0, Math.floor(p.timestamp || 0) - minTs);
+    buckets[s] = (buckets[s] || 0) + 1;
+  }
+  const maxS = Math.max(...Object.keys(buckets).map(Number));
+  const xData = Array.from({ length: maxS + 1 }, (_, i) => `+${i}s`);
+  const yData = Array.from({ length: maxS + 1 }, (_, i) => buckets[i] || 0);
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis', formatter: (p) => `${p[0].name}: ${p[0].value} pkt/s` },
+    grid: { left: 38, right: 12, bottom: 22, top: 14 },
+    xAxis: { type: 'category', data: xData, axisLabel: { fontSize: 10 } },
+    yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 10 } },
+    series: [{ type: 'line', data: yData, smooth: true, areaStyle: { opacity: 0.15 },
+      symbol: 'none', lineStyle: { width: 2, color: '#0b5cab' },
+      itemStyle: { color: '#0b5cab' } }]
+  }, true);
+}
+
 // ─── Capture polling — GET packets from peer via proxy ────────────────────────
 async function caPoll() {
   if (!caState.isCapturing) return;
@@ -5156,6 +5203,9 @@ async function caPoll() {
       caState.lastOffset += newRows.length;
       caUpdateCount();
       renderCaptureProtoChart(caState.packets);
+      renderCaptureTimeline(caState.packets);
+      const exportBtn = $('caExportBtn');
+      if (exportBtn) exportBtn.disabled = false;
     }
   } catch {
     // silently swallow polling errors
@@ -5347,6 +5397,8 @@ async function caClear() {
   const empty = $('caPacketEmpty');
   if (empty) { empty.classList.remove('hidden'); empty.textContent = 'Probe the peer, select an interface, then press Start Capture.'; }
   const addrIn = $('caAddrInput'); if (addrIn) addrIn.value = '';
+  const exportBtn = $('caExportBtn'); if (exportBtn) exportBtn.disabled = true;
+  const tpanel = $('caTimelinePanel'); if (tpanel) tpanel.classList.add('hidden');
   caUpdateCount();
 
   try {
@@ -5429,6 +5481,16 @@ async function caLoadWorkers() {
   stopBtn.addEventListener('click', caStopCapture);
   clearBtn.addEventListener('click', caClear);
   checkBtn?.addEventListener('click', caCheck);
+  $('caExportBtn')?.addEventListener('click', () => {
+    if (!caState.packets.length) { toast('No packets to export', 'warn'); return; }
+    const norm = caState.packets.map((p) => ({
+      frameHex: p.frameHex || p.hex || '',
+      rxTimestampNs: p.rxTimestampNs || (p.timestamp ? Math.round(p.timestamp * 1e9) : 0)
+    })).filter((p) => p.frameHex.length > 0);
+    if (!norm.length) { toast('No packet hex data available', 'warn'); return; }
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    downloadBlob(buildPcap(norm), `keti-capture-${ts}.pcap`);
+  });
 
   // Worker dropdown → autofill URL + re-probe
   const workerSel = $('caWorkerSelect');

@@ -3789,3 +3789,31 @@ body:not(.controlMode) .linkStrip { display: none; }
   font-size: 11px;
   white-space: pre-wrap;
 }
+
+/* TCP Flags row in Send panel */
+.tcpFlagsRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 2px;
+  font-size: .82rem;
+}
+.tcpFlagsRow .flagsLabel {
+  font-size: .78rem;
+  color: var(--muted);
+  margin-right: 2px;
+  min-width: 60px;
+}
+.tcpFlagsRow label.check { font-size: .82rem; gap: 4px; }
+.tcpFlagsRow.hidden { display: none; }
+
+/* Capture timeline chart panel */
+.caTimelinePanel {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface, var(--panel));
+  padding: 6px 12px 8px;
+  margin-bottom: 8px;
+}
+.caTimelinePanel.hidden { display: none; }
