@@ -456,9 +456,10 @@
               <button id="captureSavePcap" class="ghostBtn" title="libpcap (microsecond timestamps). Universally readable.">??.pcap</button>
               <button id="captureSavePcapNg" class="ghostBtn" title="PCAP-NG (nanosecond timestamps + interface metadata). Preferred by modern Wireshark.">??.pcapng</button>
               <button id="captureOpenPcap" class="ghostBtn" title="Open a .pcap or .pcapng file (or drag-drop onto this pane). Parses client-side, no upload.">??Open</button>
+              <button id="captureSaveCsv" class="ghostBtn" title="Export captured packets to CSV">↓ CSV</button>
               <input id="pcapFileInput" type="file" accept=".pcap,.pcapng,application/vnd.tcpdump.pcap,application/x-pcapng" hidden>
               <label class="check">
-                <input id="captureFollow" type="checkbox" checked>
+                <input id="capAutoScroll" type="checkbox" checked>
                 <span>Auto-scroll</span>
               </label>
               <input id="captureDisplayFilter" autocomplete="off" placeholder="display filter ??tcp / udp / icmp[v6] / arp / vlan / ipv6 / lldp / ptp / dns / dhcp / mac:.. / ip:.." title="Display filter ??applied client-side after decode. Tokens: tcp udp icmp icmpv6 arp vlan ipv4 ipv6 lldp ptp lacp dns dhcp ntp mdns / mac:&lt;substr&gt; / ip:&lt;substr&gt; / port:&lt;number&gt; / any substring of decoded JSON.">
@@ -533,6 +534,7 @@
               <button id="serialConnect" class="primaryAction" style="width:80px;">?곌껐</button>
               <span id="serialLed" class="led-dot"></span>
               <span id="serialState" class="serial-status-text">disconnected</span>
+              <button id="serialBreak" class="small danger" style="width:50px;margin-left:4px;" title="Send serial BREAK signal" disabled>BRK</button>
               <button id="layoutToggle" class="ghostBtn" style="margin-left:auto;width:28px;padding:3px 0;" title="3遺꾪븷 ?덉씠?꾩썐?쇰줈 ?꾪솚">??/button>
             </div>
 
@@ -1189,6 +1191,11 @@
         </section>
 
       </section>
+      <div style="height:22px;background:#f0f4f8;border-top:1px solid #d1dce8;display:flex;align-items:center;padding:0 12px;font-size:10px;color:#8899aa;gap:16px;flex-shrink:0;">
+        <span id="startTime">--</span>
+        <span id="workerStatus">Worker: disconnected</span>
+        <span id="statusExtra" style="margin-left:auto;font-size:10px;">&#x25CB; Serial   &#x25CB; Cap 0pkts</span>
+      </div>
     </main>
 <!-- ?? Event Palette Modal ?????????????????????????????????????????? -->
 <div id="eventModal" class="ev-modal-bg" style="display:none;">

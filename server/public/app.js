@@ -60,9 +60,11 @@ function initTabs() {
       $(tab.dataset.view)?.classList.add('active');
       if (tab.dataset.view === 'hyperTermView' || tab.dataset.view === 'hyperTerminalView') {
         refreshSerialStatus();
-      }
-      if (tab.dataset.view !== 'hyperTermView' && tab.dataset.view !== 'hyperTerminalView') {
+      } else {
         if (_intrPollTimer) { clearInterval(_intrPollTimer); _intrPollTimer = null; const btn = $('rv-intr-raw-poll'); if (btn) { btn.textContent = '▶ Poll'; btn.className = 'small'; } }
+      }
+      if (tab.dataset.view === 'settingsView') {
+        $('settingsWorkerRefresh')?.click();
       }
     });
   });
@@ -267,10 +269,16 @@ function startCapturePolling() {
 async function loadCapturePackets() {
   try {
     const data = await api('/api/capture/packets?limit=1000');
+    const prevCount = state.captureRows.length;
     state.captureRows = (data.rows || []).map(formatCaptureRow);
     renderCaptureRows();
-    if ($('captureTotal'))
-      $('captureTotal').textContent = `${data.total || state.captureRows.length} pkts`;
+    const total = data.total || state.captureRows.length;
+    if ($('captureTotal')) $('captureTotal').textContent = `${total} pkts`;
+    updateStatusBar();
+    if (state.captureRows.length > prevCount && $('capAutoScroll')?.checked) {
+      const ta = document.querySelector('#captureView .table-area');
+      if (ta) ta.scrollTop = ta.scrollHeight;
+    }
   } catch { /* keep stable */ }
 }
 
@@ -1612,6 +1620,7 @@ function initSplitter() {
 // ── HyperTerminal (Serial) ────────────────────────────────────────────────────
 function updateSerialUI(connected, statusText) {
   state.serialConnected = connected;
+  updateStatusBar();
   const led = $('serialLed');
   const btn = $('serialConnect');
   const st  = $('serialState');
@@ -1622,6 +1631,8 @@ function updateSerialUI(connected, statusText) {
     btn.style.width = '80px';
   }
   if (st && statusText !== undefined) st.textContent = statusText;
+  const brk = $('serialBreak');
+  if (brk) brk.disabled = !connected;
 }
 
 // appendHyperTerm — add timestamped line to serial terminal output
@@ -1765,8 +1776,43 @@ async function sendSerial() {
 async function loadLogs() {
   try {
     const data = await api('/api/logs');
-    if ($('logsBox')) $('logsBox').textContent = JSON.stringify(data, null, 2);
+    const box = $('logsBox');
+    if (!box) return;
+    const fmtEntry = (e, kind) => {
+      if (e.error) return `[${kind}] parse error: ${e.file}\n`;
+      const ts = e.startedAt || e.timestamp || e.createdAt || '';
+      const name = e.name || e.testName || e.macroName || e.id || '?';
+      const result = e.result || e.status || (e.passed != null ? (e.passed ? 'PASS' : 'FAIL') : '');
+      return `${ts ? new Date(ts).toLocaleString() + '  ' : ''}[${kind}] ${name}  ${result}\n`;
+    };
+    const tests  = (data.tests  || []).map(e => fmtEntry(e, 'TEST'));
+    const macros = (data.macros || []).map(e => fmtEntry(e, 'MACRO'));
+    const all = [...tests, ...macros];
+    box.textContent = all.length ? all.join('') : '(no logs yet)';
   } catch (err) { if ($('logsBox')) $('logsBox').textContent = `Log load failed: ${err.message}`; }
+}
+
+function downloadCaptureCsv() {
+  if (!state.captureRows.length) { toast('No packets to export', 'bad'); return; }
+  const hdr = 'No,Time,Interface,SrcMAC,DstMAC,Source,Destination,Protocol,Length,Info\n';
+  const rows = state.captureRows.map(r =>
+    [r.no, r.time, r.interfaceName, r.srcMac, r.dstMac, r.source, r.destination, r.protocol, r.length, r.info]
+      .map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
+  ).join('\n');
+  const blob = new Blob([hdr + rows], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `capture_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function updateStatusBar() {
+  const pkts = state.captureRows.length;
+  const serial = state.serialConnected ? '● Serial' : '○ Serial';
+  const cap = state.captureTimer ? `● Cap ${pkts}pkts` : `○ Cap ${pkts}pkts`;
+  const sb = $('statusExtra');
+  if (sb) sb.textContent = `${serial}   ${cap}`;
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -1899,8 +1945,37 @@ async function init() {
     if ($('serialOutput')) $('serialOutput').textContent = '';
   });
 
+  // Capture extra
+  $('captureSaveCsv')?.addEventListener('click', downloadCaptureCsv);
+
   // Settings
   $('refreshLogs')?.addEventListener('click', loadLogs);
+  $('settingsWorkerRefresh')?.addEventListener('click', async () => {
+    try {
+      const data = await api('/api/register/status');
+      const el = $('settingsWorkerState');
+      if (el) el.textContent = `${data.serialConnected ? '● connected' : '○ disconnected'}  base: ${data.baseAddress || '—'}`;
+      if ($('settingsBaseAddr') && data.baseAddress) $('settingsBaseAddr').value = data.baseAddress;
+    } catch(err) { if ($('settingsWorkerState')) $('settingsWorkerState').textContent = `offline: ${err.message}`; }
+  });
+  $('settingsBaseAddrApply')?.addEventListener('click', async () => {
+    const val = $('settingsBaseAddr')?.value?.trim();
+    if (!val) return;
+    try {
+      await api('/api/register/base-addr', { method:'POST', body: JSON.stringify({ address: val }) });
+      if ($('settingsBaseAddrSt')) $('settingsBaseAddrSt').textContent = 'Applied';
+      setTimeout(() => { if ($('settingsBaseAddrSt')) $('settingsBaseAddrSt').textContent = ''; }, 2000);
+      await refreshRegStatus();
+    } catch(err) { if ($('settingsBaseAddrSt')) $('settingsBaseAddrSt').textContent = `Error: ${err.message}`; }
+  });
+
+  // Serial Break
+  $('serialBreak')?.addEventListener('click', async () => {
+    try {
+      await api('/api/serial/break', { method:'POST', body:'{}' });
+      toast('Break signal sent', 'ok');
+    } catch(err) { toast(`Break failed: ${err.message}`, 'bad'); }
+  });
 
   try {
     await api('/api/health');

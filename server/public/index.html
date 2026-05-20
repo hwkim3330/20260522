@@ -257,12 +257,17 @@
         </div>
         <div class="panel-body">
           <div id="captureInterfaces" class="check-list" style="margin-bottom:10px;"></div>
-          <button id="captureStart" class="primary" style="width:100%;margin-bottom:5px;">Start Capture</button>
-          <button id="captureStop" class="danger" style="width:100%;margin-bottom:5px;">Stop</button>
-          <button id="captureClear" style="width:100%;margin-bottom:10px;">Clear</button>
-          <div style="font-size:10px;color:var(--muted);">
+          <button id="captureStart" class="primary" style="width:100%;margin-bottom:5px;">▶ Start</button>
+          <button id="captureStop" class="danger" style="width:100%;margin-bottom:5px;">■ Stop</button>
+          <button id="captureClear" style="width:100%;margin-bottom:5px;">Clear</button>
+          <button id="captureSaveCsv" style="width:100%;margin-bottom:10px;">↓ CSV</button>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">
             <span id="captureRunning">idle</span> &nbsp; <strong id="captureTotal">0 pkts</strong>
           </div>
+          <label style="font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="checkbox" id="capAutoScroll" checked style="width:12px;height:12px;">
+            Auto-scroll
+          </label>
         </div>
       </aside>
 
@@ -326,7 +331,8 @@
             <option value="921600">921600</option>
           </select>
           <button id="serialConnect" class="primary" style="width:80px;">연결</button>
-          <span id="serialLed" class="led-dot"></span>
+          <button id="serialBreak" class="small danger" style="width:50px;margin-left:4px;" title="Send serial BREAK signal" disabled>BRK</button>
+          <span id="serialLed" class="led-dot" style="margin-left:8px;"></span>
           <span id="serialState" class="serial-status-text">disconnected</span>
           <button id="layoutToggle" class="small" style="margin-left:auto;width:28px;padding:3px 0;" title="3분할 레이아웃으로 전환">⊞</button>
         </div>
@@ -862,33 +868,52 @@
     <section id="settingsView" class="view">
       <div class="settings-wrap">
         <h2>Settings</h2>
-        <p style="color:var(--muted);margin-bottom:20px;font-size:12px;">Configuration options will appear here in a future update.</p>
 
-        <h3>API Reference</h3>
-        <div class="api-grid">
-          <code>GET /api/health</code>
-          <code>GET /api/interfaces</code>
-          <code>POST /api/build</code>
-          <code>POST /api/send</code>
-          <code>POST /api/capture/start</code>
-          <code>POST /api/capture/stop</code>
-          <code>GET /api/capture/packets</code>
-          <code>GET /api/serial/status</code>
-          <code>POST /api/serial/connect</code>
-          <code>POST /api/serial/send</code>
-          <code>POST /api/register/read</code>
-          <code>POST /api/register/write</code>
-          <code>POST /api/fdb/read</code>
-          <code>POST /api/fdb/write</code>
-          <code>POST /api/fdb/delete</code>
-          <code>POST /api/fdb/flush</code>
-          <code>GET /api/testcases/status</code>
-          <code>POST /api/testcases/select</code>
-          <code>GET /api/logs</code>
+        <!-- Theme / Connection -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
+          <div class="reg-card" style="padding:12px;">
+            <div class="reg-card-title">Theme</div>
+            <div style="display:flex;gap:8px;margin-top:6px;">
+              <a href="/" style="flex:1;text-align:center;" class="small primary" id="themeLink">Dark</a>
+              <a href="/index-light.html" style="flex:1;text-align:center;" class="small">Light</a>
+            </div>
+          </div>
+          <div class="reg-card" style="padding:12px;">
+            <div class="reg-card-title">Worker Status</div>
+            <div id="settingsWorkerState" style="font-size:11px;color:var(--muted);margin:6px 0;">—</div>
+            <button class="small" id="settingsWorkerRefresh">Refresh</button>
+          </div>
+        </div>
+
+        <!-- Register Base Address -->
+        <div class="reg-card" style="padding:12px;margin-bottom:12px;">
+          <div class="reg-card-title">Register Base Address</div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+            <input id="settingsBaseAddr" class="mono" style="width:130px;" placeholder="0x44A00000">
+            <button class="small primary" id="settingsBaseAddrApply">Apply</button>
+            <span id="settingsBaseAddrSt" style="font-size:10px;color:var(--muted);"></span>
+          </div>
+        </div>
+
+        <!-- API Reference -->
+        <h3 style="margin-bottom:6px;">API Reference</h3>
+        <div class="api-grid" style="margin-bottom:20px;">
+          <code>GET /api/health</code><code>GET /api/interfaces</code>
+          <code>POST /api/build</code><code>POST /api/send</code>
+          <code>POST /api/capture/start</code><code>POST /api/capture/stop</code>
+          <code>GET /api/capture/packets</code><code>GET /api/serial/status</code>
+          <code>POST /api/serial/connect</code><code>POST /api/serial/send</code>
+          <code>POST /api/serial/break</code><code>POST /api/register/read</code>
+          <code>POST /api/register/write</code><code>POST /api/register/base-addr</code>
+          <code>POST /api/fdb/read</code><code>POST /api/fdb/write</code>
+          <code>POST /api/fdb/delete</code><code>POST /api/fdb/flush</code>
+          <code>GET /api/mdio/link-status</code><code>GET /api/counter/read</code>
+          <code>GET /api/testcases/status</code><code>GET /api/sequence/full</code>
+          <code>POST /api/sequence/run</code><code>GET /api/logs</code>
         </div>
 
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <h3>Logs</h3>
+          <h3>Test / Macro Logs</h3>
           <button id="refreshLogs" class="small">Refresh</button>
         </div>
         <pre class="logbox" id="logsBox">No logs loaded.</pre>
@@ -897,10 +922,11 @@
 
   </div><!-- .content -->
 
-  <!-- Status bar — mirrors WPF StatusBar -->
+  <!-- Status bar -->
   <div class="statusbar">
     <span id="startTime">--</span>
     <span id="workerStatus">Worker: disconnected</span>
+    <span id="statusExtra" style="margin-left:auto;color:var(--muted);font-size:10px;">○ Serial   ○ Cap 0pkts</span>
   </div>
 
 </div><!-- .shell -->
