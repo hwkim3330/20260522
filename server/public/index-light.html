@@ -593,29 +593,48 @@
 
                   <!-- SYSTEM CONTROL -->
                   <div id="rsec-sysctl" class="rsec">
-                    <div class="rsec-head">SYSTEM CONTROL <button class="small" id="sysctlReadAll">READ ALL</button></div>
+                    <div class="rsec-head">SYSTEM CONTROL <button class="ghostBtn" id="sysctlReadAll">READ ALL</button></div>
                     <div class="rsec-grid">
+                      <!-- VERSION -->
                       <div class="reg-card" id="rsec-version">
-                        <div class="reg-card-title">버전 정보 <small>VERSION_REG  0x000</small></div>
-                        <div class="field"><label>Value</label><input id="rv-version" class="mono" readonly placeholder="—"></div>
-                        <div class="row"><button class="small primary" data-rw="read" data-off-val="0x000" data-val="rv-version" data-st="rv-st-version">Read</button></div>
+                        <div class="reg-card-title">VERSION <small>VERSION_REG  0x000</small></div>
+                        <div class="field"><label>Version</label><input id="rv-ver-str" class="mono" readonly placeholder="—" style="flex:1;min-width:0;"></div>
+                        <div class="row">
+                          <button class="primaryAction" id="rv-ver-read">Read</button>
+                          <button class="ghostBtn" id="rv-ver-default">Default Load</button>
+                        </div>
                         <div class="reg-status" id="rv-st-version"></div>
                       </div>
+                      <!-- ENABLE_REG -->
                       <div class="reg-card" id="rsec-sysport">
-                        <div class="reg-card-title">시스템 설정 <small>ENABLE_REG  0x008</small></div>
-                        <div class="field"><label>Value (hex)</label><input id="rv-enable" class="mono" value="0x00000000"></div>
-                        <div class="row">
-                          <button class="small primary" data-rw="read" data-off-val="0x008" data-val="rv-enable" data-st="rv-st-enable">Read</button>
-                          <button class="small" data-rw="write" data-off-val="0x008" data-val="rv-enable" data-st="rv-st-enable">Write</button>
+                        <div class="reg-card-title">ENABLE <small>ENABLE_REG  0x008</small></div>
+                        <label class="rv-chk"><input id="rv-en-tsgw" type="checkbox" checked><span>TSGW Enable (bit0)</span></label>
+                        <div class="rv-port-grid">
+                          <label class="rv-chk"><input id="rv-en-p0" type="checkbox" checked><span>P0</span></label>
+                          <label class="rv-chk"><input id="rv-en-p1" type="checkbox" checked><span>P1</span></label>
+                          <label class="rv-chk"><input id="rv-en-p2" type="checkbox" checked><span>P2</span></label>
+                          <label class="rv-chk"><input id="rv-en-p3" type="checkbox" checked><span>P3</span></label>
+                          <label class="rv-chk"><input id="rv-en-p4" type="checkbox" checked><span>P4</span></label>
+                          <label class="rv-chk"><input id="rv-en-p5" type="checkbox" checked><span>P5</span></label>
+                          <label class="rv-chk"><input id="rv-en-p6" type="checkbox" checked><span>P6</span></label>
+                          <label class="rv-chk"><input id="rv-en-p7" type="checkbox" checked><span>P7</span></label>
+                        </div>
+                        <div class="row" style="margin-top:6px;">
+                          <button class="primaryAction" id="rv-en-read">Read Enable</button>
+                          <button class="ghostBtn" id="rv-en-apply">Apply Enable</button>
                         </div>
                         <div class="reg-status" id="rv-st-enable"></div>
                       </div>
+                      <!-- HOST_IF_CTRL -->
                       <div class="reg-card" id="rsec-ahb">
-                        <div class="reg-card-title">AHB 인터페이스 <small>HOST_IF_CTRL  0x00C</small></div>
-                        <div class="field"><label>Value (hex)</label><input id="rv-ahb" class="mono" value="0x00000000"></div>
+                        <div class="reg-card-title">HOST IF CTRL <small>HOST_IF_CTRL  0x00C</small></div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                          <div class="field"><label>AhbWrWait (0–15)</label><input id="rv-ahb-wr" type="number" min="0" max="15" value="15"></div>
+                          <div class="field"><label>AhbRdWait (0–15)</label><input id="rv-ahb-rd" type="number" min="0" max="15" value="15"></div>
+                        </div>
                         <div class="row">
-                          <button class="small primary" data-rw="read" data-off-val="0x00C" data-val="rv-ahb" data-st="rv-st-ahb">Read</button>
-                          <button class="small" data-rw="write" data-off-val="0x00C" data-val="rv-ahb" data-st="rv-st-ahb">Write</button>
+                          <button class="primaryAction" id="rv-ahb-read">Read</button>
+                          <button class="ghostBtn" id="rv-ahb-apply">Apply</button>
                         </div>
                         <div class="reg-status" id="rv-st-ahb"></div>
                       </div>
@@ -759,44 +778,72 @@
 
                   <!-- FDB -->
                   <div id="rsec-fdb" class="rsec">
-                    <div class="rsec-head">FDB</div>
+                    <div class="rsec-head">FDB <button class="ghostBtn" id="fdbReadConfig">READ CONFIG</button></div>
                     <div class="rsec-grid">
+                      <!-- FDB CONTROL -->
                       <div class="reg-card" id="rsec-fdb-ctrl">
-                        <div class="reg-card-title">FDB Entry Control</div>
-                        <div class="field"><label>MAC</label><input id="rv-fdbMac" class="mono" value="00:11:22:33:44:55"></div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-                          <div class="field"><label>Port</label><input id="rv-fdbPort" type="number" value="1" min="0"></div>
-                          <div class="field"><label>VLAN ID</label><input id="rv-fdbVid" type="number" value="0" min="0" max="4095"></div>
+                        <div class="reg-card-title">FDB CONTROL <small>0xA00</small></div>
+                        <div class="field"><label>Version</label><input id="rv-fdb-ver" class="mono" readonly placeholder="—"></div>
+                        <label class="rv-chk"><input id="rv-fdb-age-scan" type="checkbox"><span>AgeScan Enable (bit4)</span></label>
+                        <label class="rv-chk"><input id="rv-fdb-learning" type="checkbox"><span>Learning Enable (bit1)</span></label>
+                        <label class="rv-chk"><input id="rv-fdb-lookup" type="checkbox"><span>Lookup Enable (bit0)</span></label>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px;">
+                          <div class="field"><label>AgePeriodNs</label><input id="rv-fdb-age-period" class="mono" readonly placeholder="—"></div>
+                          <div class="field"><label>AgingThrVal</label><input id="rv-fdb-aging-thr" class="mono" readonly placeholder="—"></div>
                         </div>
-                        <div class="field check" style="margin:4px 0;">
-                          <input id="rv-fdbVlanValid" type="checkbox">
-                          <label style="margin:0;">VLAN valid</label>
+                        <div class="row" style="margin-top:6px;">
+                          <button class="primaryAction" id="rv-fdb-read-config">Read Config</button>
+                          <button class="ghostBtn" id="rv-fdb-apply-en">Apply Enable</button>
+                          <button class="ghostBtn" id="rv-fdb-load-default">Default Load</button>
                         </div>
-                        <div class="row">
-                          <button class="small primary" id="rv-fdbRead">Read</button>
-                          <button class="small" id="rv-fdbWrite">Write</button>
-                          <button class="small danger" id="rv-fdbDelete">Delete</button>
-                          <button class="small danger" id="rv-fdbFlush">Flush All</button>
-                        </div>
-                        <div class="mini-log" id="rv-fdbResult">No FDB op yet.</div>
+                        <div class="reg-status" id="rv-st-fdb-ctrl"></div>
                       </div>
-                      <div class="reg-card" id="rsec-fdb-cmd">
-                        <div class="reg-card-title">FDB RAW CMD <small>FDB_CMD</small></div>
-                        <div class="field"><label>Offset</label><input id="rv-fdb-cmd-off" class="mono" value="0x200" style="width:90px;"></div>
-                        <div class="field"><label>Value</label><input id="rv-fdb-cmd-v" class="mono" value="0x00000000"></div>
-                        <div class="row">
-                          <button class="small primary" data-rw="read" data-off="rv-fdb-cmd-off" data-val="rv-fdb-cmd-v" data-st="rv-st-fdb-cmd">Read</button>
-                          <button class="small" data-rw="write" data-off="rv-fdb-cmd-off" data-val="rv-fdb-cmd-v" data-st="rv-st-fdb-cmd">Write</button>
+                      <!-- FDB COMMAND -->
+                      <div class="reg-card" id="rsec-fdb-cmd" style="grid-column:span 2;">
+                        <div class="reg-card-title">FDB COMMAND</div>
+                        <div class="field">
+                          <label>Port-MAC</label>
+                          <select id="rv-fdb-port-mac" style="flex:1;padding:3px 6px;background:var(--input,#fff);color:var(--text);border:1px solid var(--line,#ccc);border-radius:4px;font-size:12px;">
+                            <option value="">— 선택 —</option>
+                            <option value="0|9C:6B:00:49:3A:32">Port 0  (9C:6B:00:49:3A:32)</option>
+                            <option value="1|C8:4D:44:25:2D:37">Port 1  (C8:4D:44:25:2D:37)</option>
+                            <option value="2|A0:36:9F:A8:E4:A7">Port 2  (A0:36:9F:A8:E4:A7)</option>
+                            <option value="3|A0:36:9F:A8:E4:A5">Port 3  (A0:36:9F:A8:E4:A5)</option>
+                            <option value="4|A0:36:9F:A8:E4:A4">Port 4  (A0:36:9F:A8:E4:A4)</option>
+                            <option value="5|A0:36:9F:A8:E4:A6">Port 5  (A0:36:9F:A8:E4:A6)</option>
+                          </select>
+                        </div>
+                        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:6px;">
+                          <div class="field"><label>MAC</label><input id="rv-fdb-mac" class="mono" value="00:00:00:00:00:00"></div>
+                          <div class="field"><label>VLAN ID</label><input id="rv-fdb-vlan" type="number" value="0" min="0" max="4095"></div>
+                          <div class="field check"><input id="rv-fdb-vlan-valid" type="checkbox"><label style="margin:0;">VLAN valid</label></div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+                          <div class="field"><label>Port</label><input id="rv-fdb-port" type="number" value="0" min="0" max="511"></div>
+                          <div class="field"><label>Bucket</label><input id="rv-fdb-bucket" class="mono" value="0"></div>
+                          <div class="field"><label>Slot (bitmap)</label><input id="rv-fdb-slot" class="mono" value="0x1"></div>
+                        </div>
+                        <div class="row" style="flex-wrap:wrap;gap:4px;margin-top:4px;">
+                          <button class="primaryAction" id="rv-fdb-rdhash">Read(Hash)</button>
+                          <button class="primaryAction" id="rv-fdb-rdbucket">Read(Bucket)</button>
+                          <button class="ghostBtn" id="rv-fdb-wrhash">Write(Hash)</button>
+                          <button class="ghostBtn" id="rv-fdb-wrbucket">Write(Bucket)</button>
+                          <button class="ghostBtn" style="color:#c0392b;border-color:#c0392b;" id="rv-fdb-delete">Delete</button>
+                          <button class="ghostBtn" style="color:#c0392b;border-color:#c0392b;" id="rv-fdb-initall">Init All</button>
                         </div>
                         <div class="reg-status" id="rv-st-fdb-cmd"></div>
                       </div>
-                      <div class="reg-card" id="rsec-fdb-result">
-                        <div class="reg-card-title">FDB RESULT <small>FDB_RESULT</small></div>
-                        <div class="field"><label>Offset</label><input id="rv-fdb-res-off" class="mono" value="0x204" style="width:90px;"></div>
-                        <div class="field"><label>Value</label><input id="rv-fdb-res-v" class="mono" readonly placeholder="—"></div>
-                        <div class="row"><button class="small primary" data-rw="read" data-off="rv-fdb-res-off" data-val="rv-fdb-res-v" data-st="rv-st-fdb-res">Read</button></div>
-                        <div class="reg-status" id="rv-st-fdb-res"></div>
+                    </div>
+                    <!-- FDB RESULTS TABLE -->
+                    <div style="margin-top:8px;padding:0 2px;">
+                      <div class="reg-card-title" style="padding:4px 0 4px;">FDB RESULTS</div>
+                      <div style="overflow-x:auto;">
+                        <table class="fdb-table">
+                          <thead><tr><th>Bucket</th><th>Slot</th><th>MAC</th><th>Port</th><th>Status</th><th>Timestamp</th></tr></thead>
+                          <tbody id="rv-fdb-tbody"><tr><td colspan="6" style="text-align:center;color:var(--muted);">No results yet</td></tr></tbody>
+                        </table>
                       </div>
+                      <div class="reg-status" id="rv-st-fdb-result"></div>
                     </div>
                   </div>
 
@@ -999,6 +1046,21 @@
 
       </section>
     </main>
+<!-- ── Event Palette Modal ────────────────────────────────────────── -->
+<div id="eventModal" class="ev-modal-bg" style="display:none;">
+  <div class="ev-modal">
+    <div class="ev-modal-head">
+      <span id="evModalTitle">Add Event</span>
+      <button id="evModalClose" class="ghostBtn">✕</button>
+    </div>
+    <div id="evModalBody" class="ev-modal-body"></div>
+    <div class="ev-modal-foot">
+      <button id="evModalOk" class="primaryAction">Add to Sequence</button>
+      <button id="evModalCancel" class="ghostBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <script type="module" src="/app.js"></script>

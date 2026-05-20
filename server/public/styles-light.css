@@ -4131,3 +4131,48 @@ button.toc-sub.toc-active { color: var(--accent); }
   padding: 4px 8px; font-family: Consolas, monospace; font-size: 12px; color: var(--text); outline: none;
 }
 .hyper-terminal .terminal-input input:focus { border-color: var(--accent); }
+
+/* ── Register Viewer: inline checkbox (light theme) ─────────────────── */
+.rv-chk {
+  display: flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 11px; color: var(--text); margin: 2px 0;
+}
+.rv-chk input[type=checkbox] { width: 13px; height: 13px; flex-shrink: 0; accent-color: var(--accent); }
+.rv-port-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin: 4px 0;
+}
+
+/* ── FDB Table (light theme) ─────────────────────────────────────────── */
+.fdb-table {
+  width: 100%; border-collapse: collapse; font-size: 11px;
+}
+.fdb-table th, .fdb-table td {
+  padding: 4px 8px; border: 1px solid var(--line); text-align: left; white-space: nowrap;
+}
+.fdb-table th { background: var(--panel); color: var(--muted); font-weight: 600; }
+.fdb-table tbody tr:hover { background: rgba(15,111,120,.07); }
+.fdb-table td.mono { font-family: Consolas, monospace; }
+
+/* ── Event Palette Modal (light theme) ──────────────────────────────── */
+.ev-modal-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
+}
+.ev-modal {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  width: 360px; max-width: 96vw; display: flex; flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0,0,0,.15);
+}
+.ev-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+  font-weight: 600; font-size: 13px; color: var(--text);
+}
+.ev-modal-body {
+  padding: 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.ev-modal-body .field { margin: 0; }
+.ev-modal-foot {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 10px 14px; border-top: 1px solid var(--line);
+}

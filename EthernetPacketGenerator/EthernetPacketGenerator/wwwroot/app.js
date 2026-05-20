@@ -311,12 +311,24 @@ function renderCaptureRows() {
 async function loadTestCases() {
   try {
     const data = await api('/api/testcases/status');
-    const tc = data.testCases || {};
-    if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence — ${tc.selected || '(none selected)'}`;
-    renderTcTree(tc.groups || []);
-    renderSequenceRows(tc.sequence || []);
+    // Native format: data.snapshot is an array of groups [{id,name,cases:[]}]
+    const snapshot = data.snapshot || data.testCases || [];
+    const groups = Array.isArray(snapshot) ? snapshot : (snapshot.groups || []);
+    if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence`;
+    renderTcTree(groups);
   } catch (err) {
     if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence — load failed`;
+  }
+}
+
+async function loadSequence() {
+  try {
+    const data = await api('/api/sequence/full');
+    const items = data.items || [];
+    if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence (${items.length} events)`;
+    renderSequenceRows(items);
+  } catch (err) {
+    renderSequenceRows([]);
   }
 }
 
@@ -324,22 +336,31 @@ function renderTcTree(groups) {
   const root = $('tcTree');
   if (!root) return;
   if (!groups.length) { root.innerHTML = '<p style="color:var(--muted);font-size:10px;">No groups. Add one above.</p>'; return; }
-  root.innerHTML = groups.map(g => `
+  root.innerHTML = groups.map((g, gi) => `
     <div class="tc-group">
       <div class="tc-group-head">
         <span>${esc(g.name)}</span>
-        <button class="small danger tc-del-group" data-group="${g.index}">Del</button>
+        <button class="small danger tc-del-group" data-group="${gi}">Del</button>
       </div>
-      ${(g.testCases || []).map(t => `
-        <div class="tc-item ${t.selected ? 'selected' : ''}" data-group="${t.groupIndex}" data-tc="${t.index}">
-          <span>${esc(t.name)}</span><small>${t.itemCount} items</small>
+      ${(g.cases || g.testCases || []).map((t, ti) => `
+        <div class="tc-item" data-group="${gi}" data-tc="${ti}">
+          <span>${esc(t.name)}</span><small>${(t.steps||[]).length} steps</small>
         </div>`).join('')}
     </div>`).join('');
   root.querySelectorAll('.tc-item').forEach(el => el.addEventListener('click', async () => {
     state.selectedGroupIdx = Number(el.dataset.group);
     state.selectedTcIdx = Number(el.dataset.tc);
-    await api('/api/testcases/select', { method: 'POST', body: JSON.stringify({ groupIndex: state.selectedGroupIdx, testCaseIndex: state.selectedTcIdx }) });
-    await loadTestCases();
+    el.closest('.tc-group').querySelectorAll('.tc-item').forEach(e => e.classList.remove('selected'));
+    el.classList.add('selected');
+    // Load TC steps into sequence
+    try {
+      const data = await api('/api/testcases/status');
+      const snapshot = data.snapshot || [];
+      const grp = snapshot[state.selectedGroupIdx];
+      const tc  = (grp?.cases || grp?.testCases || [])[state.selectedTcIdx];
+      if (tc) renderSequenceRows(tc.steps || []);
+      if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence — ${esc(tc?.name || '')}`;
+    } catch {}
   }));
   root.querySelectorAll('.tc-del-group').forEach(btn => btn.addEventListener('click', async () => {
     if (!confirm('Delete this group?')) return;
@@ -348,16 +369,38 @@ function renderTcTree(groups) {
   }));
 }
 
+function seqEventSummary(item) {
+  const t = (item.eventType || item.type || '').toLowerCase();
+  if (t === 'delay')          return `${item.delayMs ?? 100}ms`;
+  if (t === 'registerwrite')  return `${item.offset || item.address}  ←  ${item.value}`;
+  if (t === 'registerread')   return `${item.offset || item.address}`;
+  if (t === 'registerexpect') return `${item.offset || item.address} & ${item.mask||'0xFFFFFFFF'} == ${item.expected} [${item.timeoutMs||1000}ms]`;
+  if (t === 'fdbwrite')       return `MAC:${item.mac}  Port:${item.port}`;
+  if (t === 'fdbread')        return `MAC:${item.mac}`;
+  if (t === 'fdbflush')       return `flush all`;
+  if (t === 'rxverify')       return `if:${item.captureInterface||'?'}  filter:${item.captureFilter||''}  expect:${item.captureExpected||1}`;
+  return JSON.stringify(item).slice(0,60);
+}
+
 function renderSequenceRows(items) {
   const tbody = $('sequenceRows');
   if (!tbody) return;
-  if (!items.length) { tbody.innerHTML = `<tr><td colspan="8" class="empty">No sequence loaded.</td></tr>`; return; }
-  tbody.innerHTML = items.map((item, i) => `
-    <tr>
-      <td>${i}</td><td>${esc(item.kind)}</td><td>${item.checked ? '✓' : ''}</td>
-      <td>${esc(item.packetName || item.eventType || '')}</td>
-      <td colspan="4" style="color:var(--muted);">${esc(item.eventType ? JSON.stringify(item.params || {}) : `${(item.blocks || []).length} block(s)`)}</td>
-    </tr>`).join('');
+  if (!items.length) { tbody.innerHTML = `<tr><td colspan="4" class="empty">No events. Drag from palette or click items →</td></tr>`; return; }
+  tbody.innerHTML = items.map((item, i) => {
+    const type = item.eventType || item.type || item.kind || 'Event';
+    const info = seqEventSummary(item);
+    return `<tr>
+      <td style="color:var(--muted);font-size:10px;">${i+1}</td>
+      <td><strong>${esc(type)}</strong></td>
+      <td style="color:var(--muted);font-size:10px;">${esc(info)}</td>
+      <td><button class="small danger seq-del" data-idx="${i}" style="padding:1px 5px;font-size:10px;">✕</button></td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('.seq-del').forEach(btn => btn.addEventListener('click', async () => {
+    const idx = Number(btn.dataset.idx);
+    await api('/api/sequence/event/remove', { method:'POST', body: JSON.stringify({ index: idx }) });
+    await loadSequence();
+  }));
 }
 
 async function addTcGroup() {
@@ -382,6 +425,143 @@ async function saveTcCurrent() {
     toast('Saved', 'ok');
     await loadTestCases();
   } catch (err) { toast(`Save failed: ${err.message}`, 'bad'); }
+}
+
+// ── Event Palette Modal ───────────────────────────────────────────────────────
+const EVENT_FIELDS = {
+  Delay:      [{ id:'delayMs',  label:'Delay (ms)',       type:'number', def:'500'           }],
+  RegWrite:   [{ id:'offset',   label:'Offset (hex)',     type:'text',   def:'0x000'         },
+               { id:'value',    label:'Value (hex)',      type:'text',   def:'0x00000001'    }],
+  RegRead:    [{ id:'offset',   label:'Offset (hex)',     type:'text',   def:'0x000'         }],
+  RegVerify:  [{ id:'offset',   label:'Offset (hex)',     type:'text',   def:'0x000'         },
+               { id:'expected', label:'Expected (hex)',   type:'text',   def:'0x00000001'    },
+               { id:'mask',     label:'Mask (hex)',       type:'text',   def:'0xFFFFFFFF'    },
+               { id:'timeoutMs',label:'Timeout (ms)',     type:'number', def:'1000'          }],
+  FdbWrite:   [{ id:'mac',      label:'MAC',              type:'text',   def:'00:00:00:00:00:00' },
+               { id:'vlanId',   label:'VLAN ID',          type:'number', def:'0'             },
+               { id:'port',     label:'Port',             type:'number', def:'0'             }],
+  FdbRead:    [{ id:'mac',      label:'MAC',              type:'text',   def:'00:00:00:00:00:00' },
+               { id:'vlanId',   label:'VLAN ID',          type:'number', def:'0'             }],
+  FdbFlush:   [],
+  RxVerify:   [{ id:'captureInterface', label:'Interface',     type:'text',   def:''        },
+               { id:'captureFilter',    label:'Filter (text)', type:'text',   def:''        },
+               { id:'captureExpected',  label:'Min frames',    type:'number', def:'1'       }],
+};
+
+const EVENT_TYPES = {
+  Delay:     'delay',     RegWrite: 'registerWrite', RegRead: 'registerRead',
+  RegVerify: 'registerExpect', FdbWrite: 'fdbWrite', FdbRead:  'fdbRead',
+  FdbFlush:  'fdbFlush',  RxVerify: 'rxVerify',
+};
+
+let _evKind = null;
+
+function openEventModal(kind) {
+  _evKind = kind;
+  const fields = EVENT_FIELDS[kind] || [];
+  const body = $('evModalBody');
+  const title = $('evModalTitle');
+  if (!body || !title) return;
+  title.textContent = `Add Event: ${kind}`;
+  if (!fields.length) {
+    body.innerHTML = `<p style="color:var(--muted);font-size:12px;">No parameters required. Click "Add to Sequence".</p>`;
+  } else {
+    body.innerHTML = fields.map(f => `
+      <div class="field">
+        <label>${f.label}</label>
+        <input id="evf-${f.id}" type="${f.type}" value="${f.def}" placeholder="${f.label}">
+      </div>`).join('');
+  }
+  $('eventModal').style.display = 'flex';
+  body.querySelector('input')?.focus();
+}
+
+async function confirmEventModal() {
+  const kind   = _evKind;
+  const fields = EVENT_FIELDS[kind] || [];
+  const event  = { eventType: EVENT_TYPES[kind] || kind.toLowerCase() };
+  for (const f of fields) {
+    const el = $(`evf-${f.id}`);
+    if (!el) continue;
+    event[f.id] = f.type === 'number' ? Number(el.value) : el.value;
+  }
+  try {
+    await api('/api/sequence/event/add', { method:'POST', body: JSON.stringify(event) });
+    closeEventModal();
+    await loadSequence();
+    toast(`${kind} added`, 'ok');
+  } catch(err) { toast(`Add failed: ${err.message}`, 'bad'); }
+}
+
+function closeEventModal() {
+  $('eventModal').style.display = 'none';
+  _evKind = null;
+}
+
+async function runSequence() {
+  try {
+    const data = await api('/api/sequence/run', { method:'POST', body:'{}' });
+    appendSeqTerm(`▶ Sequence started`);
+    toast('Sequence started', 'ok');
+  } catch(err) { toast(`Run failed: ${err.message}`, 'bad'); }
+}
+
+async function clearSequence() {
+  if (!confirm('Clear all sequence events?')) return;
+  try {
+    await api('/api/sequence/events/clear', { method:'POST', body:'{}' });
+    await loadSequence();
+    toast('Sequence cleared', 'ok');
+  } catch(err) { toast(`Clear failed: ${err.message}`, 'bad'); }
+}
+
+// ── Light-theme seq builder helpers ──────────────────────────────────────────
+function updateSeqBuilderFields() {
+  const type = $('seqEventType')?.value || '';
+  const show = (...ids) => ids.forEach(id => $(id)?.classList.toggle('hidden', false));
+  const hide = (...ids) => ids.forEach(id => $(id)?.classList.add('hidden'));
+  hide('seqDelayField','seqAddrField','seqValueField','seqMaskField','seqExpectedField',
+       'seqTimeoutField','seqMacField','seqPortField','seqSerialTextField','seqSerialHexField',
+       'seqCaptureIfaceField','seqCaptureFilterField','seqCaptureExpectedField');
+  if (type === 'Delay')         show('seqDelayField');
+  if (type === 'RegWrite')      show('seqAddrField','seqValueField');
+  if (type === 'RegRead')       show('seqAddrField');
+  if (type === 'RegWaitFor')    show('seqAddrField','seqExpectedField','seqMaskField','seqTimeoutField');
+  if (type === 'FdbWrite')      show('seqMacField','seqPortField');
+  if (type === 'FdbRead')       show('seqMacField');
+  if (type === 'FdbWaitFor')    show('seqMacField','seqTimeoutField');
+  if (type === 'SerialSend')    show('seqSerialTextField','seqSerialHexField');
+  if (type === 'SerialVerify')  show('seqSerialTextField','seqTimeoutField');
+  if (type === 'CaptureVerify') show('seqCaptureIfaceField','seqCaptureFilterField','seqCaptureExpectedField');
+}
+
+function buildSeqEventFromForm(type) {
+  const ev = { eventType: EVENT_TYPES[type] || type.toLowerCase() };
+  if ($('seqDelayMs'))           ev.delayMs           = Number($('seqDelayMs').value) || 100;
+  if ($('seqAddress')?.value)    ev.offset             = $('seqAddress').value;
+  if ($('seqValue')?.value)      ev.value              = $('seqValue').value;
+  if ($('seqMask')?.value)       ev.mask               = $('seqMask').value;
+  if ($('seqExpected')?.value)   ev.expected           = $('seqExpected').value;
+  if ($('seqTimeout')?.value)    ev.timeoutMs          = Number($('seqTimeout').value) || 1000;
+  if ($('seqMac')?.value)        ev.mac                = $('seqMac').value;
+  if ($('seqPort')?.value !== undefined) ev.port       = Number($('seqPort')?.value) || 0;
+  if ($('seqSerialText')?.value) ev.text               = $('seqSerialText').value;
+  if ($('seqSerialHex')?.value)  ev.hex                = $('seqSerialHex').value;
+  if ($('seqCaptureIface')?.value) ev.captureInterface = $('seqCaptureIface').value;
+  if ($('seqCaptureFilter')?.value) ev.captureFilter   = $('seqCaptureFilter').value;
+  if ($('seqCaptureExpected')?.value) ev.captureExpected = Number($('seqCaptureExpected').value) || 1;
+  return ev;
+}
+
+function seqPresetEvent(preset) {
+  const map = {
+    delay100:  { eventType:'delay', delayMs:100 },
+    delay1s:   { eventType:'delay', delayMs:1000 },
+    flushFdb:  { eventType:'fdbFlush' },
+    readBmsr:  { eventType:'registerRead', offset:'0x001' },
+    waitLink:  { eventType:'registerExpect', offset:'0x001', expected:'0x00000004', mask:'0x00000004', timeoutMs:5000 },
+  };
+  return map[preset] || null;
 }
 
 function appendSeqTerm(text) {
@@ -480,6 +660,274 @@ async function rvWrite(offset, value, statusId) {
   } catch (err) { setRegStatus(statusId, `오류: ${err.message}`, false); }
 }
 
+// ── SYSTEM CONTROL helpers ────────────────────────────────────────────────────
+function parseSysCtrlVersion(v) {
+  const major = (v >>> 24) & 0xFF;
+  const year  = (v >>> 16) & 0xFF;
+  const month = (v >>> 12) & 0xF;
+  const day   = (v >>>  4) & 0xFF;
+  const minor =  v         & 0xF;
+  const name  = major === 0x52 ? 'TSGW' : `0x${major.toString(16).toUpperCase().padStart(2,'0')}`;
+  const yr    = ((year >> 4) & 0xF) * 10 + (year & 0xF);
+  const dy    = ((day  >> 4) & 0xF) * 10 + (day  & 0xF);
+  return `${name}  20${String(yr).padStart(2,'0')}년 ${month}월 ${String(dy).padStart(2,'0')}일  v${minor}`;
+}
+
+function syncSysCtrlEnable(v) {
+  const ports = (v >>> 8) & 0xFF;
+  if ($('rv-en-tsgw')) $('rv-en-tsgw').checked = (v & 1) !== 0;
+  for (let i = 0; i < 8; i++) {
+    const el = $(`rv-en-p${i}`);
+    if (el) el.checked = (ports & (1 << i)) !== 0;
+  }
+}
+
+function buildSysCtrlEnable() {
+  let ports = 0;
+  for (let i = 0; i < 8; i++) { if ($(`rv-en-p${i}`)?.checked) ports |= (1 << i); }
+  return (($('rv-en-tsgw')?.checked ? 1 : 0) | (ports << 8)) >>> 0;
+}
+
+function syncHostIf(v) {
+  if ($('rv-ahb-wr')) $('rv-ahb-wr').value = v & 0xF;
+  if ($('rv-ahb-rd')) $('rv-ahb-rd').value = (v >>> 4) & 0xF;
+}
+
+function buildHostIf() {
+  const wr = Math.max(0, Math.min(15, parseInt($('rv-ahb-wr')?.value || '0')));
+  const rd = Math.max(0, Math.min(15, parseInt($('rv-ahb-rd')?.value || '0')));
+  return ((rd << 4) | wr) >>> 0;
+}
+
+// ── FDB register helpers ──────────────────────────────────────────────────────
+const FDB_OFF = {
+  VERSION:    0xA00, FDB_LOAD:   0xA04, ENABLE:     0xA0C,
+  AGE_PERIOD: 0xA10, AGING_THR:  0xA14, MCU_MAC0:   0xA18,
+  MCU_MAC1:   0xA1C, MCU_VLAN:   0xA20, MCU_PORT:   0xA24,
+  MCU_BUCKET: 0xA28, MCU_CMD:    0xA2C, FDB_STATUS: 0xA40,
+  CMD_STATUS: 0xA44, RD_BUCKET:  0xA48, RD_PORT:    0xA4C,
+  RD_FLAGS:   0xA50, RD_MAC0:    0xA54, RD_MAC1:    0xA58, RD_MAC2:    0xA5C,
+};
+const FDB_CMD = { HASH_READ: 0x12, READ_BUCKET: 0x13, HASH_WRITE: 0x14, WRITE_BUCKET: 0x15, HASH_DELETE: 0x16, FLUSH_ALL: 0x70 };
+
+async function fdbReg(off) {
+  const hex = `0x${off.toString(16).toUpperCase().padStart(3,'0')}`;
+  const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset: hex }) });
+  const raw = d.value || `0x${(d.valueDec||0).toString(16).toUpperCase().padStart(8,'0')}`;
+  return parseInt(raw, 16) >>> 0;
+}
+
+async function fdbWr(off, val) {
+  const offset = `0x${off.toString(16).toUpperCase().padStart(3,'0')}`;
+  const value  = `0x${(val >>> 0).toString(16).toUpperCase().padStart(8,'0')}`;
+  await api('/api/register/write', { method:'POST', body: JSON.stringify({ offset, value }) });
+}
+
+async function fdbPoll(off, mask, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 500);
+  while (Date.now() < deadline) {
+    if ((await fdbReg(off) & mask) !== 0) return;
+    await new Promise(r => setTimeout(r, 10));
+  }
+  throw new Error(`Poll timeout off=0x${off.toString(16)}`);
+}
+
+function fdbEncodeMac(mac) {
+  const b = mac.split(':').map(s => parseInt(s, 16));
+  return {
+    mac0: ((b[2] << 24) | (b[3] << 16) | (b[4] << 8) | b[5]) >>> 0,
+    mac1: ((b[0] <<  8) | b[1]) >>> 0,
+  };
+}
+
+function fdbDecodeMac(hi16, mid16, lo16) {
+  return [
+    (hi16 >> 8)&0xFF, hi16&0xFF,
+    (mid16>>8)&0xFF, mid16&0xFF,
+    (lo16>>8)&0xFF, lo16&0xFF,
+  ].map(b => b.toString(16).toUpperCase().padStart(2,'0')).join(':');
+}
+
+function fdbInputs() {
+  const mac    = $('rv-fdb-mac')?.value.trim() || '00:00:00:00:00:00';
+  const vlanId = parseInt($('rv-fdb-vlan')?.value || '0') & 0xFFF;
+  const vlanV  = !!$('rv-fdb-vlan-valid')?.checked;
+  const port   = parseInt($('rv-fdb-port')?.value || '0') & 0x1FF;
+  const bktStr = ($('rv-fdb-bucket')?.value || '0').trim();
+  const sltStr = ($('rv-fdb-slot')?.value || '0x1').trim();
+  const bucket = parseInt(bktStr) & 0x3FF;
+  const slot   = parseInt(sltStr) & 0xF || 1;
+  return { mac, vlanId, vlanV, port, bucket, slot };
+}
+
+function fdbAddRow(row) {
+  const tbody = $('rv-fdb-tbody');
+  if (!tbody) return;
+  if (tbody.querySelector('[colspan]')) tbody.innerHTML = '';
+  const tr = document.createElement('tr');
+  const mac = row.mac || '-';
+  tr.innerHTML = `<td>${row.bucket??'-'}</td><td>${row.slot??'-'}</td>`
+    + `<td class="mono">${mac}</td><td>${row.port??'-'}</td>`
+    + `<td>${row.status??'-'}</td><td>${row.ts??'-'}</td>`;
+  tbody.insertBefore(tr, tbody.firstChild);
+}
+
+function fdbClearRows() {
+  const tbody = $('rv-fdb-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No results yet</td></tr>';
+}
+
+async function fdbReadByHash() {
+  const { mac, vlanId, vlanV } = fdbInputs();
+  setRegStatus('rv-st-fdb-cmd', '읽는 중...', false);
+  try {
+    const { mac0, mac1 } = fdbEncodeMac(mac);
+    await fdbWr(FDB_OFF.MCU_MAC0, mac0);
+    await fdbWr(FDB_OFF.MCU_MAC1, mac1);
+    await fdbWr(FDB_OFF.MCU_VLAN, (vlanV ? 0x1000 : 0) | vlanId);
+    await fdbWr(FDB_OFF.MCU_CMD,  FDB_CMD.HASH_READ);
+    await fdbPoll(FDB_OFF.CMD_STATUS, 0x1, 500);
+    const flags = await fdbReg(FDB_OFF.RD_FLAGS);
+    fdbClearRows();
+    if ((flags & 0x8000) === 0) {
+      fdbAddRow({ mac, port:'-', bucket:'-', slot:'-', ts:'-', status:'없음 (미학습)' });
+      setRegStatus('rv-st-fdb-cmd', '미학습 (테이블에 없음)', false);
+    } else {
+      const rdPort   = await fdbReg(FDB_OFF.RD_PORT);
+      const rdBucket = await fdbReg(FDB_OFF.RD_BUCKET);
+      fdbAddRow({
+        mac, port: rdPort & 0x1FF, bucket: rdBucket & 0x3FF,
+        slot: `0x${((rdBucket>>12)&0xF).toString(16)}`,
+        ts: flags & 0x3FFF, status: (flags & 0x4000) ? 'Static' : 'Dynamic',
+      });
+      setRegStatus('rv-st-fdb-cmd', '엔트리 발견', true);
+    }
+  } catch(err) { setRegStatus('rv-st-fdb-cmd', `오류: ${err.message}`, false); }
+}
+
+async function fdbReadByBucket() {
+  const { bucket, slot } = fdbInputs();
+  setRegStatus('rv-st-fdb-cmd', '읽는 중...', false);
+  try {
+    await fdbWr(FDB_OFF.MCU_BUCKET, ((slot & 0xF) << 16) | (bucket & 0x3FF));
+    await fdbWr(FDB_OFF.MCU_CMD,    FDB_CMD.READ_BUCKET);
+    await fdbPoll(FDB_OFF.CMD_STATUS, 0x1, 500);
+    const flags = await fdbReg(FDB_OFF.RD_FLAGS);
+    fdbClearRows();
+    if ((flags & 0x8000) === 0) {
+      fdbAddRow({ bucket, slot:`0x${slot.toString(16)}`, mac:'-', port:'-', ts:'-', status:'없음' });
+      setRegStatus('rv-st-fdb-cmd', '슬롯 비어있음', false);
+    } else {
+      const mac0 = await fdbReg(FDB_OFF.RD_MAC0);
+      const mac1 = await fdbReg(FDB_OFF.RD_MAC1);
+      const mac2 = await fdbReg(FDB_OFF.RD_MAC2);
+      const rdPort = await fdbReg(FDB_OFF.RD_PORT);
+      fdbAddRow({
+        bucket, slot:`0x${slot.toString(16)}`,
+        mac: fdbDecodeMac(mac2 & 0xFFFF, mac1 & 0xFFFF, mac0 & 0xFFFF),
+        port: rdPort & 0x1FF, ts: flags & 0x3FFF,
+        status: (flags & 0x4000) ? 'Static' : 'Dynamic',
+      });
+      setRegStatus('rv-st-fdb-cmd', '엔트리 발견', true);
+    }
+  } catch(err) { setRegStatus('rv-st-fdb-cmd', `오류: ${err.message}`, false); }
+}
+
+async function fdbWriteByHash() {
+  const { mac, vlanId, vlanV, port } = fdbInputs();
+  setRegStatus('rv-st-fdb-cmd', '쓰는 중...', false);
+  try {
+    const { mac0, mac1 } = fdbEncodeMac(mac);
+    await fdbWr(FDB_OFF.MCU_MAC0, mac0);
+    await fdbWr(FDB_OFF.MCU_MAC1, mac1);
+    await fdbWr(FDB_OFF.MCU_VLAN, (vlanV ? 0x1000 : 0) | vlanId);
+    await fdbWr(FDB_OFF.MCU_PORT, port);
+    await fdbWr(FDB_OFF.MCU_CMD,  FDB_CMD.HASH_WRITE);
+    await fdbPoll(FDB_OFF.CMD_STATUS, 0x4, 500);
+    setRegStatus('rv-st-fdb-cmd', '쓰기 완료', true);
+  } catch(err) { setRegStatus('rv-st-fdb-cmd', `오류: ${err.message}`, false); }
+}
+
+async function fdbWriteByBucket() {
+  const { mac, vlanId, vlanV, port, bucket, slot } = fdbInputs();
+  setRegStatus('rv-st-fdb-cmd', '쓰는 중...', false);
+  try {
+    const { mac0, mac1 } = fdbEncodeMac(mac);
+    await fdbWr(FDB_OFF.MCU_MAC0,   mac0);
+    await fdbWr(FDB_OFF.MCU_MAC1,   mac1);
+    await fdbWr(FDB_OFF.MCU_VLAN,   (vlanV ? 0x1000 : 0) | vlanId);
+    await fdbWr(FDB_OFF.MCU_PORT,   port);
+    await fdbWr(FDB_OFF.MCU_BUCKET, ((slot & 0xF) << 16) | (bucket & 0x3FF));
+    await fdbWr(FDB_OFF.MCU_CMD,    FDB_CMD.WRITE_BUCKET);
+    await fdbPoll(FDB_OFF.CMD_STATUS, 0x4, 500);
+    setRegStatus('rv-st-fdb-cmd', `쓰기 완료  Bkt:${bucket}  Slot:0x${slot.toString(16)}`, true);
+  } catch(err) { setRegStatus('rv-st-fdb-cmd', `오류: ${err.message}`, false); }
+}
+
+async function fdbDeleteByHash() {
+  const { mac, vlanId, vlanV } = fdbInputs();
+  if (!confirm(`Delete FDB entry for ${mac}?`)) return;
+  setRegStatus('rv-st-fdb-cmd', '삭제 중...', false);
+  try {
+    const { mac0, mac1 } = fdbEncodeMac(mac);
+    await fdbWr(FDB_OFF.MCU_MAC0, mac0);
+    await fdbWr(FDB_OFF.MCU_MAC1, mac1);
+    await fdbWr(FDB_OFF.MCU_VLAN, (vlanV ? 0x1000 : 0) | vlanId);
+    await fdbWr(FDB_OFF.MCU_CMD,  FDB_CMD.HASH_DELETE);
+    await fdbPoll(FDB_OFF.CMD_STATUS, 0x4, 500);
+    fdbClearRows();
+    setRegStatus('rv-st-fdb-cmd', `삭제 완료 (${mac})`, true);
+  } catch(err) { setRegStatus('rv-st-fdb-cmd', `오류: ${err.message}`, false); }
+}
+
+async function fdbInitAll() {
+  if (!confirm('Init all FDB tables? (Flush All)')) return;
+  setRegStatus('rv-st-fdb-cmd', '전체 초기화 중...', false);
+  try {
+    await fdbWr(FDB_OFF.MCU_CMD, FDB_CMD.FLUSH_ALL);
+    await fdbPoll(FDB_OFF.FDB_STATUS, 0x1, 2000);
+    fdbClearRows();
+    setRegStatus('rv-st-fdb-cmd', '전체 초기화 완료', true);
+  } catch(err) { setRegStatus('rv-st-fdb-cmd', `오류: ${err.message}`, false); }
+}
+
+async function fdbCtrlReadConfig() {
+  setRegStatus('rv-st-fdb-ctrl', '읽는 중...', false);
+  try {
+    const ver = await fdbReg(FDB_OFF.VERSION);
+    if ($('rv-fdb-ver')) $('rv-fdb-ver').value = `0x${ver.toString(16).toUpperCase().padStart(8,'0')}`;
+    const en = await fdbReg(FDB_OFF.ENABLE);
+    if ($('rv-fdb-age-scan')) $('rv-fdb-age-scan').checked = (en & (1<<4)) !== 0;
+    if ($('rv-fdb-learning')) $('rv-fdb-learning').checked = (en & (1<<1)) !== 0;
+    if ($('rv-fdb-lookup'))   $('rv-fdb-lookup').checked   = (en & 1) !== 0;
+    const ap = await fdbReg(FDB_OFF.AGE_PERIOD);
+    const at = await fdbReg(FDB_OFF.AGING_THR);
+    if ($('rv-fdb-age-period')) $('rv-fdb-age-period').value = ap;
+    if ($('rv-fdb-aging-thr'))  $('rv-fdb-aging-thr').value  = at;
+    setRegStatus('rv-st-fdb-ctrl', '읽기 완료', true);
+  } catch(err) { setRegStatus('rv-st-fdb-ctrl', `오류: ${err.message}`, false); }
+}
+
+async function fdbCtrlApplyEnable() {
+  let en = 0;
+  if ($('rv-fdb-age-scan')?.checked) en |= (1<<4);
+  if ($('rv-fdb-learning')?.checked) en |= (1<<1);
+  if ($('rv-fdb-lookup')?.checked)   en |= 1;
+  setRegStatus('rv-st-fdb-ctrl', '적용 중...', false);
+  try {
+    await fdbWr(FDB_OFF.ENABLE, en);
+    setRegStatus('rv-st-fdb-ctrl', 'ENABLE 적용 완료', true);
+  } catch(err) { setRegStatus('rv-st-fdb-ctrl', `오류: ${err.message}`, false); }
+}
+
+async function fdbCtrlLoadDefault() {
+  setRegStatus('rv-st-fdb-ctrl', 'Default Load 중...', false);
+  try {
+    await fdbWr(FDB_OFF.FDB_LOAD, 1);
+    setRegStatus('rv-st-fdb-ctrl', 'Default Load 완료', true);
+  } catch(err) { setRegStatus('rv-st-fdb-ctrl', `오류: ${err.message}`, false); }
+}
+
 function initRegViewer() {
   const rc = $('regContent');
   if (!rc) return;
@@ -503,15 +951,53 @@ function initRegViewer() {
     } catch { /* status already set */ }
   });
 
-  // READ ALL buttons
-  $('sysctlReadAll')?.addEventListener('click', () =>
-    Promise.allSettled([
-      rvRead('0x000', 'rv-version', 'rv-st-version'),
-      rvRead('0x008', 'rv-enable',  'rv-st-enable'),
-      rvRead('0x00C', 'rv-ahb',     'rv-st-ahb'),
-    ])
-  );
+  // ── SYSTEM CONTROL ────────────────────────────────────────────────────────
+  $('rv-ver-read')?.addEventListener('click', async () => {
+    try {
+      const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x000' }) });
+      const raw = d.value || `0x${(d.valueDec||0).toString(16).toUpperCase().padStart(8,'0')}`;
+      const v = parseInt(raw, 16) >>> 0;
+      if ($('rv-ver-str')) $('rv-ver-str').value = parseSysCtrlVersion(v);
+      setRegStatus('rv-st-version', 'OK', true);
+    } catch(err) { setRegStatus('rv-st-version', `오류: ${err.message}`, false); }
+  });
+  $('rv-ver-default')?.addEventListener('click', async () => {
+    await rvWrite('0x004', '0x00000001', 'rv-st-version');
+  });
 
+  $('rv-en-read')?.addEventListener('click', async () => {
+    try {
+      const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x008' }) });
+      const raw = d.value || `0x${(d.valueDec||0).toString(16).toUpperCase().padStart(8,'0')}`;
+      syncSysCtrlEnable(parseInt(raw, 16) >>> 0);
+      setRegStatus('rv-st-enable', 'OK', true);
+    } catch(err) { setRegStatus('rv-st-enable', `오류: ${err.message}`, false); }
+  });
+  $('rv-en-apply')?.addEventListener('click', async () => {
+    const v = buildSysCtrlEnable();
+    await rvWrite('0x008', `0x${v.toString(16).toUpperCase().padStart(8,'0')}`, 'rv-st-enable');
+  });
+
+  $('rv-ahb-read')?.addEventListener('click', async () => {
+    try {
+      const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x00C' }) });
+      const raw = d.value || `0x${(d.valueDec||0).toString(16).toUpperCase().padStart(8,'0')}`;
+      syncHostIf(parseInt(raw, 16) >>> 0);
+      setRegStatus('rv-st-ahb', 'OK', true);
+    } catch(err) { setRegStatus('rv-st-ahb', `오류: ${err.message}`, false); }
+  });
+  $('rv-ahb-apply')?.addEventListener('click', async () => {
+    const v = buildHostIf();
+    await rvWrite('0x00C', `0x${v.toString(16).toUpperCase().padStart(8,'0')}`, 'rv-st-ahb');
+  });
+
+  $('sysctlReadAll')?.addEventListener('click', () => {
+    $('rv-ver-read')?.click();
+    $('rv-en-read')?.click();
+    $('rv-ahb-read')?.click();
+  });
+
+  // ── INTERRUPT ─────────────────────────────────────────────────────────────
   $('interruptReadAll')?.addEventListener('click', () =>
     Promise.allSettled([
       rvRead($('rv-intr-ctrl-off')?.value || '0x010', 'rv-intr-ctrl', 'rv-st-intr-ctrl'),
@@ -542,24 +1028,26 @@ function initRegViewer() {
     rvRead($('rv-count-off')?.value || '0x300', 'rv-count-v', 'rv-st-count')
   );
 
-  // FDB in Register Viewer
-  function rvFdbPay() {
-    return { mac: $('rv-fdbMac')?.value.trim(), port: Number($('rv-fdbPort')?.value) || 0, vlanValid: $('rv-fdbVlanValid')?.checked, vlanId: Number($('rv-fdbVid')?.value) || 0 };
-  }
-  async function rvFdbCall(path, payload = rvFdbPay()) {
-    try {
-      const data = await api(path, { method: 'POST', body: JSON.stringify(payload) });
-      if ($('rv-fdbResult')) $('rv-fdbResult').textContent = JSON.stringify(data, null, 2);
-      toast(data.status || 'FDB done', 'ok');
-    } catch (err) {
-      if ($('rv-fdbResult')) $('rv-fdbResult').textContent = `FDB failed: ${err.message}`;
-      toast(`FDB failed: ${err.message}`, 'bad');
-    }
-  }
-  $('rv-fdbRead')?.addEventListener('click',   () => rvFdbCall('/api/fdb/read'));
-  $('rv-fdbWrite')?.addEventListener('click',  () => rvFdbCall('/api/fdb/write'));
-  $('rv-fdbDelete')?.addEventListener('click', () => rvFdbCall('/api/fdb/delete'));
-  $('rv-fdbFlush')?.addEventListener('click',  () => { if (confirm('Flush all FDB entries?')) rvFdbCall('/api/fdb/flush', {}); });
+  // ── FDB ──────────────────────────────────────────────────────────────────
+  $('rv-fdb-port-mac')?.addEventListener('change', e => {
+    const val = e.target.value;
+    if (!val) return;
+    const [portIdx, mac] = val.split('|');
+    if ($('rv-fdb-mac'))  $('rv-fdb-mac').value  = mac;
+    if ($('rv-fdb-port')) $('rv-fdb-port').value = portIdx;
+  });
+
+  $('rv-fdb-read-config')?.addEventListener('click', fdbCtrlReadConfig);
+  $('fdbReadConfig')?.addEventListener('click', fdbCtrlReadConfig);
+  $('rv-fdb-apply-en')?.addEventListener('click', fdbCtrlApplyEnable);
+  $('rv-fdb-load-default')?.addEventListener('click', fdbCtrlLoadDefault);
+
+  $('rv-fdb-rdhash')?.addEventListener('click',   fdbReadByHash);
+  $('rv-fdb-rdbucket')?.addEventListener('click', fdbReadByBucket);
+  $('rv-fdb-wrhash')?.addEventListener('click',   fdbWriteByHash);
+  $('rv-fdb-wrbucket')?.addEventListener('click', fdbWriteByBucket);
+  $('rv-fdb-delete')?.addEventListener('click',   fdbDeleteByHash);
+  $('rv-fdb-initall')?.addEventListener('click',  fdbInitAll);
 }
 
 // ── TOC Navigation ────────────────────────────────────────────────────────────
@@ -831,6 +1319,55 @@ async function init() {
   $('seqTermInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') seqTermSend(); });
   $('clearSeqTerminal')?.addEventListener('click', () => { if ($('seqTermOutput')) $('seqTermOutput').textContent = ''; });
 
+  // Sequence run/clear/load buttons (dark theme)
+  $('seqRun')?.addEventListener('click', runSequence);
+  $('seqClear')?.addEventListener('click', clearSequence);
+  $('seqLoad')?.addEventListener('click', loadSequence);
+  // Light theme aliases
+  $('tcRunSequence')?.addEventListener('click', runSequence);
+  $('seqClearEvents')?.addEventListener('click', clearSequence);
+  $('seqRefreshFull')?.addEventListener('click', loadSequence);
+
+  // Event palette — each item opens modal (dark theme)
+  document.querySelectorAll('.palette-item[data-event]').forEach(el => {
+    el.addEventListener('click', () => openEventModal(el.dataset.event));
+  });
+
+  // Light theme: seqAddEvent button (reads from form)
+  $('seqAddEvent')?.addEventListener('click', async () => {
+    const type = $('seqEventType')?.value || 'Delay';
+    const event = buildSeqEventFromForm(type);
+    try {
+      await api('/api/sequence/event/add', { method:'POST', body: JSON.stringify(event) });
+      await loadSequence();
+      toast(`${type} added`, 'ok');
+    } catch(err) { toast(`Add failed: ${err.message}`, 'bad'); }
+  });
+
+  // Light theme: seqPreset quick buttons
+  document.querySelectorAll('.seqPreset[data-preset]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ev = seqPresetEvent(btn.dataset.preset);
+      if (!ev) return;
+      try {
+        await api('/api/sequence/event/add', { method:'POST', body: JSON.stringify(ev) });
+        await loadSequence();
+        toast(`${btn.dataset.preset} added`, 'ok');
+      } catch(err) { toast(`Add failed: ${err.message}`, 'bad'); }
+    });
+  });
+
+  // Light theme: seqEventType change shows/hides fields
+  $('seqEventType')?.addEventListener('change', updateSeqBuilderFields);
+  updateSeqBuilderFields();
+
+  // Modal buttons
+  $('evModalOk')?.addEventListener('click', confirmEventModal);
+  $('evModalCancel')?.addEventListener('click', closeEventModal);
+  $('evModalClose')?.addEventListener('click', closeEventModal);
+  $('eventModal')?.addEventListener('click', e => { if (e.target === $('eventModal')) closeEventModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('eventModal')?.style.display !== 'none') closeEventModal(); });
+
   // Register / FDB (Scenario Lab)
   $('regStatusRefresh')?.addEventListener('click', refreshRegStatus);
   $('regRead')?.addEventListener('click', readRegister);
@@ -861,6 +1398,7 @@ async function init() {
       refreshSerialStatus(),
       refreshRegStatus(),
       loadTestCases(),
+      loadSequence(),
     ]);
     startCapturePolling();
     state.serialTimer = setInterval(refreshSerialStatus, 2000);
