@@ -316,7 +316,15 @@
           <select id="serialPort" style="width:200px;"></select>
           <button id="serialRefresh" class="small" style="width:24px;padding:3px 0;" title="포트 새로고침">↻</button>
           <label class="toolbar-label">BAUD</label>
-          <select id="serialBaud" style="width:80px;"></select>
+          <select id="serialBaud" style="width:80px;">
+            <option value="9600">9600</option>
+            <option value="19200">19200</option>
+            <option value="38400">38400</option>
+            <option value="57600">57600</option>
+            <option value="115200" selected>115200</option>
+            <option value="230400">230400</option>
+            <option value="921600">921600</option>
+          </select>
           <button id="serialConnect" class="primary" style="width:80px;">연결</button>
           <span id="serialLed" class="led-dot"></span>
           <span id="serialState" class="serial-status-text">disconnected</span>
@@ -379,7 +387,7 @@
               </div>
               <div class="toc-baseaddr">
                 <label>BASE ADDR</label>
-                <input id="regBaseAddr" class="mono" value="0x44A00000" readonly>
+                <input id="regBaseAddr" class="mono" value="0x44A00000" title="Enter hex address and press Enter/Tab to apply">
               </div>
             </div>
 
@@ -644,13 +652,30 @@
 
               <!-- COUNT -->
               <div id="rsec-count" class="rsec">
-                <div class="rsec-head">COUNT <button class="small" id="countReadAll">READ ALL</button></div>
-                <div class="rsec-grid">
+                <div class="rsec-head">COUNT</div>
+                <div class="rsec-grid" style="grid-template-columns:1fr;">
                   <div class="reg-card" id="rsec-count-rxtx">
-                    <div class="reg-card-title">RX / TX / FBR Counters</div>
-                    <div class="field"><label>Offset</label><input id="rv-count-off" class="mono" value="0x300" style="width:90px;"></div>
-                    <div class="field"><label>Value</label><input id="rv-count-v" class="mono" readonly placeholder="—"></div>
-                    <div class="row"><button class="small primary" data-rw="read" data-off="rv-count-off" data-val="rv-count-v" data-st="rv-st-count">Read</button></div>
+                    <div class="reg-card-title">RX / TX / FBR Counters <small>read_cnt</small></div>
+                    <div class="row" style="align-items:center;gap:6px;flex-wrap:wrap;">
+                      <label class="toolbar-label">Port</label>
+                      <select id="rv-count-port" style="padding:3px 6px;background:var(--input,var(--bg));color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px;">
+                        <option value="all">ALL</option>
+                        <option value="0">Port 0</option>
+                        <option value="1">Port 1</option>
+                        <option value="2">Port 2</option>
+                        <option value="3">Port 3</option>
+                        <option value="4">Port 4</option>
+                        <option value="5">Port 5</option>
+                      </select>
+                      <button class="small primary" id="rv-count-read">Read</button>
+                      <button class="small" id="rv-count-clear">Clear</button>
+                    </div>
+                    <div style="overflow-x:auto;margin-top:6px;">
+                      <table class="fdb-table">
+                        <thead><tr><th>Name</th><th>Address</th><th>Hex</th><th style="text-align:right;">Dec</th></tr></thead>
+                        <tbody id="rv-count-tbody"><tr><td colspan="4" style="text-align:center;color:var(--muted);">No data</td></tr></tbody>
+                      </table>
+                    </div>
                     <div class="reg-status" id="rv-st-count"></div>
                   </div>
                 </div>
@@ -658,35 +683,70 @@
 
               <!-- MDIO -->
               <div id="rsec-mdio" class="rsec">
-                <div class="rsec-head">MDIO</div>
+                <div class="rsec-head">MDIO <button class="small primary" id="rv-mdio-read-link">Read All Link Status</button></div>
                 <div class="rsec-grid">
+                  <!-- MDIO SETUP -->
                   <div class="reg-card" id="rsec-mdio-setup">
-                    <div class="reg-card-title">MDIO SETUP / TIME</div>
-                    <div class="field"><label>Offset</label><input id="rv-mdio-setup-off" class="mono" value="0x400" style="width:90px;"></div>
-                    <div class="field"><label>Value</label><input id="rv-mdio-setup" class="mono" value="0x00000000"></div>
+                    <div class="reg-card-title">MDIO SETUP</div>
+                    <div class="field">
+                      <label>Port</label>
+                      <select id="rv-mdio-port" style="flex:1;padding:3px 6px;background:var(--input,var(--bg));color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:12px;">
+                        <option value="0">Port 0  (MDIO0)</option>
+                        <option value="1">Port 1  (MDIO1)</option>
+                        <option value="2">Port 2  (MDIO2)</option>
+                        <option value="3">Port 3  (MDIO3)</option>
+                        <option value="4">Port 4  (MDIO4)</option>
+                        <option value="5">Port 5  (MDIO5)</option>
+                      </select>
+                    </div>
+                    <label class="rv-chk"><input id="rv-mdio-en" type="checkbox"><span>MDIO Enable</span></label>
+                    <label class="rv-chk"><input id="rv-mdio-predis" type="checkbox"><span>Preamble Disable</span></label>
+                    <label class="rv-chk"><input id="rv-mdio-intr" type="checkbox"><span>Interrupt Enable</span></label>
+                    <div class="field" style="margin-top:6px;">
+                      <label>Target MDC (MHz)</label>
+                      <input id="rv-mdio-mhz" type="text" value="2.5" style="width:55px;">
+                      <button class="small" id="rv-mdio-calc" style="margin-left:4px;">Calc</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin:4px 0;">
+                      <div class="field"><label style="font-size:10px;">CLK Div</label><input id="rv-mdio-clk" class="mono" readonly value="20"></div>
+                      <div class="field"><label style="font-size:10px;">MILLISEC</label><input id="rv-mdio-ms" class="mono" readonly value="2500"></div>
+                      <div class="field"><label style="font-size:10px;">UNIT</label><input id="rv-mdio-unit" class="mono" readonly value="100"></div>
+                    </div>
                     <div class="row">
-                      <button class="small primary" data-rw="read" data-off="rv-mdio-setup-off" data-val="rv-mdio-setup" data-st="rv-st-mdio">Read</button>
-                      <button class="small" data-rw="write" data-off="rv-mdio-setup-off" data-val="rv-mdio-setup" data-st="rv-st-mdio">Write</button>
+                      <button class="small primary" id="rv-mdio-apply">Apply Setup</button>
                     </div>
                     <div class="reg-status" id="rv-st-mdio"></div>
                   </div>
-                  <div class="reg-card" id="rsec-mdio-link">
-                    <div class="reg-card-title">LINK STATUS</div>
-                    <div class="field"><label>Offset</label><input id="rv-mdio-link-off" class="mono" value="0x404" style="width:90px;"></div>
-                    <div class="field"><label>Value</label><input id="rv-mdio-link-v" class="mono" readonly placeholder="—"></div>
-                    <div class="row"><button class="small primary" data-rw="read" data-off="rv-mdio-link-off" data-val="rv-mdio-link-v" data-st="rv-st-mdio-link">Read</button></div>
-                    <div class="reg-status" id="rv-st-mdio-link"></div>
-                  </div>
+                  <!-- PHY ACCESS -->
                   <div class="reg-card" id="rsec-mdio-acc">
                     <div class="reg-card-title">PHY ACCESS</div>
-                    <div class="field"><label>Offset</label><input id="rv-mdio-acc-off" class="mono" value="0x408" style="width:90px;"></div>
-                    <div class="field"><label>Value</label><input id="rv-mdio-acc-v" class="mono" value="0x00000000"></div>
+                    <div class="field"><label>PHY Addr</label><input id="rv-mdio-phy-addr" class="mono" value="0x00" style="width:80px;"></div>
+                    <div class="field"><label>Reg Addr</label><input id="rv-mdio-reg-addr" class="mono" value="0x01" style="width:80px;"></div>
+                    <div class="field"><label>Data</label><input id="rv-mdio-acc-data" class="mono" value="0x0000"></div>
                     <div class="row">
-                      <button class="small primary" data-rw="read" data-off="rv-mdio-acc-off" data-val="rv-mdio-acc-v" data-st="rv-st-mdio-acc">Read</button>
-                      <button class="small" data-rw="write" data-off="rv-mdio-acc-off" data-val="rv-mdio-acc-v" data-st="rv-st-mdio-acc">Write</button>
+                      <button class="small primary" id="rv-mdio-read-phy">Read PHY</button>
+                      <button class="small" id="rv-mdio-write-phy">Write PHY</button>
                     </div>
                     <div class="reg-status" id="rv-st-mdio-acc"></div>
                   </div>
+                </div>
+                <!-- LINK STATUS TABLE -->
+                <div id="rsec-mdio-link" style="margin-top:8px;padding:0 2px;">
+                  <div class="reg-card-title" style="padding:4px 0 4px;">LINK STATUS</div>
+                  <div style="overflow-x:auto;">
+                    <table class="fdb-table">
+                      <thead><tr><th>Port</th><th>PHY Addr</th><th>Link</th></tr></thead>
+                      <tbody>
+                        <tr><td>Port 0</td><td class="mono">0x00</td><td id="rv-mdio-link-0"><span class="led-dot"></span> —</td></tr>
+                        <tr><td>Port 1</td><td class="mono">0x04</td><td id="rv-mdio-link-1"><span class="led-dot"></span> —</td></tr>
+                        <tr><td>Port 2</td><td class="mono">0x05</td><td id="rv-mdio-link-2"><span class="led-dot"></span> —</td></tr>
+                        <tr><td>Port 3</td><td class="mono">0x08</td><td id="rv-mdio-link-3"><span class="led-dot"></span> —</td></tr>
+                        <tr><td>Port 4</td><td class="mono">0x0A</td><td id="rv-mdio-link-4"><span class="led-dot"></span> —</td></tr>
+                        <tr><td>Port 5</td><td class="mono">0x0C</td><td id="rv-mdio-link-5"><span class="led-dot"></span> —</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="reg-status" id="rv-st-mdio-link"></div>
                 </div>
               </div>
 

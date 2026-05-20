@@ -928,6 +928,108 @@ async function fdbCtrlLoadDefault() {
   } catch(err) { setRegStatus('rv-st-fdb-ctrl', `오류: ${err.message}`, false); }
 }
 
+// ── COUNT Viewer ──────────────────────────────────────────────────────────────
+async function countRead() {
+  const port = $('rv-count-port')?.value || 'all';
+  setRegStatus('rv-st-count', '읽는 중...', true);
+  try {
+    const data = await api(`/api/counter/read?port=${encodeURIComponent(port)}`);
+    const tbody = $('rv-count-tbody');
+    if (!tbody) return;
+    if (!data.counters || data.counters.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);">데이터 없음 — serial 연결 확인</td></tr>';
+      setRegStatus('rv-st-count', '데이터 없음', false);
+      return;
+    }
+    tbody.innerHTML = data.counters.map(c =>
+      `<tr><td>${esc(c.name)}</td><td class="mono" style="font-size:11px;">${esc(c.address)}</td><td class="mono" style="font-size:11px;">${esc(c.value)}</td><td style="text-align:right;">${c.valueDec}</td></tr>`
+    ).join('');
+    setRegStatus('rv-st-count', `${data.counters.length}개  포트: ${port === 'all' ? 'ALL' : `Port ${port}`}`, true);
+  } catch(err) { setRegStatus('rv-st-count', `오류: ${err.message}`, false); }
+}
+
+// ── MDIO ──────────────────────────────────────────────────────────────────────
+const MDIO_PHY_ADDRS = [0x00, 0x04, 0x05, 0x08, 0x0A, 0x0C];
+
+function mdioPortChanged() {
+  const port = parseInt($('rv-mdio-port')?.value || '0');
+  const phy  = MDIO_PHY_ADDRS[port] ?? 0;
+  if ($('rv-mdio-phy-addr'))
+    $('rv-mdio-phy-addr').value = `0x${phy.toString(16).toUpperCase().padStart(2,'0')}`;
+}
+
+function mdioCalcMdc() {
+  const mhz = parseFloat($('rv-mdio-mhz')?.value || '2.5');
+  if (isNaN(mhz) || mhz <= 0) { setRegStatus('rv-st-mdio', '주파수 형식 오류 (예: 2.5)', false); return; }
+  const ahbMhz = 100.0;
+  const clk  = Math.max(1, Math.min(255,  Math.round(ahbMhz / (2.0 * mhz))));
+  const ms   = Math.max(1, Math.min(4095, Math.round(mhz * 1000.0)));
+  if ($('rv-mdio-clk'))  $('rv-mdio-clk').value  = String(clk);
+  if ($('rv-mdio-ms'))   $('rv-mdio-ms').value   = String(ms);
+  if ($('rv-mdio-unit')) $('rv-mdio-unit').value  = '100';
+  const actual = ahbMhz / (2.0 * clk);
+  setRegStatus('rv-st-mdio', `f_MDC ≈ ${actual.toFixed(3)} MHz  (CLK=${clk}, MILLISEC=${ms})`, true);
+}
+
+async function mdioApplySetup() {
+  const port       = parseInt($('rv-mdio-port')?.value || '0');
+  const enable     = $('rv-mdio-en')?.checked    ?? false;
+  const preDisable = $('rv-mdio-predis')?.checked ?? false;
+  const intrEnable = $('rv-mdio-intr')?.checked  ?? false;
+  const targetMhz  = parseFloat($('rv-mdio-mhz')?.value || '2.5');
+  setRegStatus('rv-st-mdio', '적용 중...', true);
+  try {
+    const data = await api('/api/mdio/setup', { method:'POST',
+      body: JSON.stringify({ port, enable, preDisable, interruptEnable: intrEnable, targetMhz }) });
+    const setupHex = String(data.setup || '').replace(/^0x/i, '');
+    const timeHex  = String(data.time  || '').replace(/^0x/i, '');
+    setRegStatus('rv-st-mdio', `SETUP=0x${setupHex}  TIME=0x${timeHex}  CLK=${data.clk} MS=${data.ms}`, true);
+  } catch(err) { setRegStatus('rv-st-mdio', `오류: ${err.message}`, false); }
+}
+
+async function mdioReadPhy() {
+  const port    = parseInt($('rv-mdio-port')?.value || '0');
+  const phyAddr = $('rv-mdio-phy-addr')?.value || '0x00';
+  const regAddr = $('rv-mdio-reg-addr')?.value || '0x01';
+  setRegStatus('rv-st-mdio-acc', '읽는 중...', true);
+  try {
+    const data = await api('/api/mdio/read', { method:'POST',
+      body: JSON.stringify({ port, phyAddr, regAddr }) });
+    if ($('rv-mdio-acc-data')) $('rv-mdio-acc-data').value = data.value || '0x0000';
+    setRegStatus('rv-st-mdio-acc', `PHY[${phyAddr}] Reg[${regAddr}] = ${data.value}`, true);
+  } catch(err) { setRegStatus('rv-st-mdio-acc', `오류: ${err.message}`, false); }
+}
+
+async function mdioWritePhy() {
+  const port    = parseInt($('rv-mdio-port')?.value || '0');
+  const phyAddr = $('rv-mdio-phy-addr')?.value || '0x00';
+  const regAddr = $('rv-mdio-reg-addr')?.value || '0x01';
+  const value   = $('rv-mdio-acc-data')?.value  || '0x0000';
+  setRegStatus('rv-st-mdio-acc', '쓰는 중...', true);
+  try {
+    await api('/api/mdio/write', { method:'POST',
+      body: JSON.stringify({ port, phyAddr, regAddr, value }) });
+    setRegStatus('rv-st-mdio-acc', `PHY[${phyAddr}] Reg[${regAddr}] ← ${value}  완료`, true);
+  } catch(err) { setRegStatus('rv-st-mdio-acc', `오류: ${err.message}`, false); }
+}
+
+async function mdioReadAllLink() {
+  setRegStatus('rv-st-mdio-link', '읽는 중...', true);
+  try {
+    const data = await api('/api/mdio/link-status');
+    if (data.ports) {
+      data.ports.forEach(p => {
+        const td = $(`rv-mdio-link-${p.port}`);
+        if (!td) return;
+        const linked = p.linkUp === true;
+        const label  = p.linkUp === null ? '—' : (p.linkUp ? 'Link UP' : 'Link DOWN');
+        td.innerHTML = `<span class="led-dot${linked ? ' connected' : ''}"></span> ${label}`;
+      });
+    }
+    setRegStatus('rv-st-mdio-link', `갱신 완료  ${new Date().toLocaleTimeString()}`, true);
+  } catch(err) { setRegStatus('rv-st-mdio-link', `오류: ${err.message}`, false); }
+}
+
 function initRegViewer() {
   const rc = $('regContent');
   if (!rc) return;
@@ -1024,9 +1126,35 @@ function initRegViewer() {
     ])
   );
 
-  $('countReadAll')?.addEventListener('click', () =>
-    rvRead($('rv-count-off')?.value || '0x300', 'rv-count-v', 'rv-st-count')
-  );
+  $('rv-count-read')?.addEventListener('click', countRead);
+  $('rv-count-clear')?.addEventListener('click', () => {
+    const tbody = $('rv-count-tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No data</td></tr>';
+    setRegStatus('rv-st-count', '', true);
+  });
+
+  // ── MDIO ─────────────────────────────────────────────────────────────────
+  $('rv-mdio-port')?.addEventListener('change', mdioPortChanged);
+  $('rv-mdio-calc')?.addEventListener('click', mdioCalcMdc);
+  $('rv-mdio-apply')?.addEventListener('click', mdioApplySetup);
+  $('rv-mdio-read-phy')?.addEventListener('click', mdioReadPhy);
+  $('rv-mdio-write-phy')?.addEventListener('click', mdioWritePhy);
+  $('rv-mdio-read-link')?.addEventListener('click', mdioReadAllLink);
+
+  // BASE ADDR editable — applies in native mode
+  $('regBaseAddr')?.addEventListener('keydown', async function(e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const val = this.value.trim();
+    if (!val) return;
+    try { await api('/api/register/base-addr', { method:'POST', body: JSON.stringify({ address: val }) }); } catch { /* worker mode: read-only */ }
+    await refreshRegStatus();
+  });
+  $('regBaseAddr')?.addEventListener('blur', async function() {
+    const val = this.value.trim();
+    if (!val) return;
+    try { await api('/api/register/base-addr', { method:'POST', body: JSON.stringify({ address: val }) }); } catch { /* worker mode: read-only */ }
+  });
 
   // ── FDB ──────────────────────────────────────────────────────────────────
   $('rv-fdb-port-mac')?.addEventListener('change', e => {
@@ -1194,11 +1322,13 @@ async function refreshSerialStatus() {
     }
 
     const baudSel = $('serialBaud');
-    if (baudSel && !baudSel.options.length) {
+    if (baudSel) {
       const cur = baudSel.value || String(t.selectedBaudRate || 115200);
-      baudSel.innerHTML = (t.baudRates || [9600, 19200, 38400, 57600, 115200, 230400, 921600])
-        .map(b => `<option value="${b}">${b}</option>`).join('');
-      baudSel.value = cur;
+      const rates = t.baudRates || [9600, 19200, 38400, 57600, 115200, 230400, 921600];
+      if (!baudSel.options.length || (t.baudRates && baudSel.options.length !== rates.length)) {
+        baudSel.innerHTML = rates.map(b => `<option value="${b}">${b}</option>`).join('');
+      }
+      baudSel.value = t.selectedBaudRate ? String(t.selectedBaudRate) : cur;
     }
 
     // Native mode: data.open / data.connected; C# worker mode: t.isConnected

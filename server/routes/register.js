@@ -42,4 +42,16 @@ router.post('/register/write', async (req, res) => {
   } catch (e) { wErr(res, e); }
 });
 
+// POST /api/register/base-addr  body: { address }  (native mode only; no-op for C# worker)
+router.post('/register/base-addr', async (req, res) => {
+  try {
+    const addr = String(req.body?.address || req.body?.addr || '').trim();
+    if (!addr) return res.status(400).json({ ok: false, error: 'address required' });
+    if (!hasWorker(req)) {
+      req.app.locals.switchProtocol.setBaseAddress(addr);
+    }
+    res.json({ ok: true });
+  } catch (e) { wErr(res, e); }
+});
+
 module.exports = router;
