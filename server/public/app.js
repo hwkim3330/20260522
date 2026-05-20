@@ -61,6 +61,9 @@ function initTabs() {
       if (tab.dataset.view === 'hyperTermView' || tab.dataset.view === 'hyperTerminalView') {
         refreshSerialStatus();
       }
+      if (tab.dataset.view !== 'hyperTermView' && tab.dataset.view !== 'hyperTerminalView') {
+        if (_intrPollTimer) { clearInterval(_intrPollTimer); _intrPollTimer = null; const btn = $('rv-intr-raw-poll'); if (btn) { btn.textContent = '▶ Poll'; btn.className = 'small'; } }
+      }
     });
   });
   // Light theme uses .modeTab class
@@ -710,11 +713,15 @@ const FDB_OFF = {
 };
 const FDB_CMD = { HASH_READ: 0x12, READ_BUCKET: 0x13, HASH_WRITE: 0x14, WRITE_BUCKET: 0x15, HASH_DELETE: 0x16, FLUSH_ALL: 0x70 };
 
+function parseRegD(d) {
+  const raw = d.value || `0x${((d.valueDec||0)>>>0).toString(16).toUpperCase().padStart(8,'0')}`;
+  return parseInt(raw, 16) >>> 0;
+}
+
 async function fdbReg(off) {
   const hex = `0x${off.toString(16).toUpperCase().padStart(3,'0')}`;
   const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset: hex }) });
-  const raw = d.value || `0x${(d.valueDec||0).toString(16).toUpperCase().padStart(8,'0')}`;
-  return parseInt(raw, 16) >>> 0;
+  return parseRegD(d);
 }
 
 async function fdbWr(off, val) {
@@ -965,7 +972,7 @@ function initIntrDots() {
 async function intrCtrlRead() {
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x010' }) });
-    const v = parseInt(d.value || '0', 16) >>> 0;
+    const v = parseRegD(d);
     const low = (v & 1) !== 0;
     const actHigh = $('rv-intr-act-high'); const actLow = $('rv-intr-act-low');
     if (actHigh) actHigh.checked = !low;
@@ -982,7 +989,7 @@ async function intrCtrlApply() {
 async function intrRawRead() {
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x014' }) });
-    const v = parseInt(d.value || '0', 16) >>> 0;
+    const v = parseRegD(d);
     for (let i = 0; i < 16; i++) {
       const dot = $(`rv-intr-p${i}`);
       if (dot) dot.classList.toggle('connected', ((v >> i) & 1) !== 0);
@@ -1012,7 +1019,7 @@ function intrTogglePoll() {
 async function intrMaskRead() {
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x018' }) });
-    const v = parseInt(d.value || '0', 16) >>> 0;
+    const v = parseRegD(d);
     for (let i = 0; i < 16; i++) { const c = $(`rv-intr-pm${i}`); if (c) c.checked = ((v>>i)&1)!==0; }
     for (let i = 0; i < 8;  i++) { const c = $(`rv-intr-mm${i}`); if (c) c.checked = ((v>>(16+i))&1)!==0; }
     const sw = $('rv-intr-sw-mask'); if (sw) sw.checked = ((v>>>31)&1) !== 0;
@@ -1045,9 +1052,9 @@ async function tsReadTime() {
     const dNs    = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x020' }) });
     const dSecLo = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x024' }) });
     const dSecHi = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x028' }) });
-    const ns    = parseInt(dNs.value    || '0', 16) >>> 0;
-    const secLo = parseInt(dSecLo.value || '0', 16) >>> 0;
-    const secHi = parseInt(dSecHi.value || '0', 16) >>> 0;
+    const ns    = parseRegD(dNs);
+    const secLo = parseRegD(dSecLo);
+    const secHi = parseRegD(dSecHi);
     const sec   = BigInt(secHi & 0xFFFF) * 4294967296n + BigInt(secLo >>> 0);
     const dt    = new Date(Number(sec) * 1000);
     const cur   = `${dt.getFullYear()}-${pad2(dt.getMonth()+1)}-${pad2(dt.getDate())}  ` +
@@ -1094,8 +1101,8 @@ async function tsReadClock() {
   try {
     const dA  = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x02C' }) });
     const dC1 = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x030' }) });
-    const addend    = parseInt(dA.value  || '0', 16) >>> 0;
-    const ctrl1     = parseInt(dC1.value || '0', 16) >>> 0;
+    const addend    = parseRegD(dA);
+    const ctrl1     = parseRegD(dC1);
     const increment = ctrl1 & 0xFFFF;
     const scaled    = increment + addend / 4294967296.0;
     const nsPerTick = scaled * 1e9 / 4294967296.0;
@@ -1115,7 +1122,7 @@ async function tsApplyClock() {
     const increment = Math.floor(exactIncr) >>> 0;
     const addend    = Math.round((exactIncr - increment) * 4294967296.0) >>> 0;
     const dC1 = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x030' }) });
-    let ctrl1 = (parseInt(dC1.value || '0', 16) >>> 0) & 0xFFFF0000;
+    let ctrl1 = parseRegD(dC1) & 0xFFFF0000;
     ctrl1 |= (increment & 0xFFFF);
     await api('/api/register/write', { method:'POST', body: JSON.stringify({ offset:'0x02C', value:`0x${addend.toString(16).padStart(8,'0')}` }) });
     await api('/api/register/write', { method:'POST', body: JSON.stringify({ offset:'0x030', value:`0x${ctrl1.toString(16).padStart(8,'0')}` }) });
@@ -1126,12 +1133,14 @@ async function tsApplyClock() {
 async function tsReadPps() {
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x030' }) });
-    const v = parseInt(d.value || '0', 16) >>> 0;
+    const v = parseRegD(d);
     const src = (v >> 16) & 0x3;
     const wid = ((v >> 24) & 0xFF) * 2;
     document.querySelectorAll('input[name="ts-pps-src"]').forEach(r => { r.checked = parseInt(r.value) === (src >= 2 ? 2 : src); });
     if ($('rv-ts-pps-width')) $('rv-ts-pps-width').value = wid;
-  } catch { /* ignore */ }
+    const srcLabel = ['Disable','Internal','GPS'][src] || 'GPS';
+    setRegStatus('rv-st-ts-clk', `PPS: ${srcLabel}  width=${wid}ms`, true);
+  } catch(err) { setRegStatus('rv-st-ts-clk', `PPS 읽기 오류: ${err.message}`, false); }
 }
 
 async function tsApplyPps() {
@@ -1139,7 +1148,7 @@ async function tsApplyPps() {
     const src = parseInt(document.querySelector('input[name="ts-pps-src"]:checked')?.value || '1');
     const wid = parseInt($('rv-ts-pps-width')?.value || '100');
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x030' }) });
-    let v = (parseInt(d.value || '0', 16) >>> 0) & ~0xFF030000;
+    let v = parseRegD(d) & ~0xFF030000;
     v |= (src & 0x3) << 16;
     v |= ((Math.floor(wid / 2) & 0xFF) << 24);
     await api('/api/register/write', { method:'POST', body: JSON.stringify({ offset:'0x030', value:`0x${v.toString(16).padStart(8,'0')}` }) });
@@ -1161,7 +1170,7 @@ async function tsAdjSec(inc) {
 }
 
 // ── LED / CLOCK ───────────────────────────────────────────────────────────────
-const LED_FPGA_LABELS = ['System CLK Blink','AHB CLK Blink','RGMII CLK Blink','Reset_n','EXT_SW[0]','EXT_SW[1]','EXT_SW[2]','EXT_SW[3]'];
+const LED_FPGA_LABELS = ['System CLK Blink(400M)','AHB CLK Blink(400M)','RGMII CLK Blink(125M)','Reset_n','EXT_SW[0]','EXT_SW[1]','EXT_SW[2]','EXT_SW[3]'];
 
 function initLedDots() {
   const fpgaDiv = $('rv-led-fpga-dots');
@@ -1201,7 +1210,7 @@ async function ledRead() {
   setRegStatus('rv-st-led', '읽는 중...', true);
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x060' }) });
-    const v = parseInt(d.value || '0', 16) >>> 0;
+    const v = parseRegD(d);
     const mode = (v >> 8) & 0x3;
     const leds = v & 0xFF;
     document.querySelectorAll('input[name="led-mode"]').forEach(r => { r.checked = parseInt(r.value) === mode; });
@@ -1220,7 +1229,7 @@ async function ledApplyMode() {
   setRegStatus('rv-st-led', '설정 중...', true);
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x060' }) });
-    let v = (parseInt(d.value || '0', 16) >>> 0) & ~0x300;
+    let v = parseRegD(d) & ~0x300;
     v |= (mode << 8);
     await api('/api/register/write', { method:'POST', body: JSON.stringify({ offset:'0x060', value:`0x${v.toString(16).padStart(8,'0')}` }) });
     ledModeChanged();
@@ -1234,7 +1243,7 @@ async function ledApplyReg() {
   setRegStatus('rv-st-led', '설정 중...', true);
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x060' }) });
-    let v = (parseInt(d.value || '0', 16) >>> 0) & ~0xFF;
+    let v = parseRegD(d) & ~0xFF;
     v |= leds;
     await api('/api/register/write', { method:'POST', body: JSON.stringify({ offset:'0x060', value:`0x${v.toString(16).padStart(8,'0')}` }) });
     setRegStatus('rv-st-led', 'LED 출력 설정 완료', true);
@@ -1244,7 +1253,7 @@ async function ledApplyReg() {
 async function extSwRead() {
   try {
     const d = await api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x064' }) });
-    const v = parseInt(d.value || '0', 16) >>> 0;
+    const v = parseRegD(d);
     for (let i = 0; i < 6; i++) {
       const dot = $(`rv-ext-sw-${i}`);
       if (dot) dot.classList.toggle('connected', ((v >> i) & 1) !== 0);
@@ -1264,9 +1273,9 @@ async function clkRead() {
       api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x06C' }) }),
       api('/api/register/read', { method:'POST', body: JSON.stringify({ offset:'0x0D0' }) }),
     ]);
-    if ($('rv-clk-sys'))   $('rv-clk-sys').value   = clkLimitToMhz(parseInt(d0.value || '0', 16) >>> 0);
-    if ($('rv-clk-ahb'))   $('rv-clk-ahb').value   = clkLimitToMhz(parseInt(d1.value || '0', 16) >>> 0);
-    if ($('rv-clk-rgmii')) $('rv-clk-rgmii').value = clkLimitToMhz(parseInt(dr.value || '0', 16) >>> 0);
+    if ($('rv-clk-sys'))   $('rv-clk-sys').value   = clkLimitToMhz(parseRegD(d0));
+    if ($('rv-clk-ahb'))   $('rv-clk-ahb').value   = clkLimitToMhz(parseRegD(d1));
+    if ($('rv-clk-rgmii')) $('rv-clk-rgmii').value = clkLimitToMhz(parseRegD(dr));
     setRegStatus('rv-st-clk-limit', 'OK', true);
   } catch(err) { setRegStatus('rv-st-clk-limit', `오류: ${err.message}`, false); }
 }
