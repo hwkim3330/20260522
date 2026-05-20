@@ -220,7 +220,9 @@ server.listen(PORT, '0.0.0.0', () => {
   if (wifiIp) console.log(`[PacketLabManager] Network : http://${wifiIp}:${PORT}`);
   console.log(`[PacketLabManager] Worker  : ws://localhost:${PORT}/ws/worker?workerId=${LOCAL_WORKER}`);
   console.log(`[PacketLabManager] Reports : ${reportsDir}`);
-  console.log(`[PacketLabManager] Serial  : ${serialBridge.isAvailable() ? 'serialport npm ready' : 'no serialport npm (install: npm install serialport)'}`);
+  console.log(`[PacketLabManager] Serial  : ${serialBridge.isAvailable()
+    ? (process.platform === 'linux' ? 'Linux TTY ready (stty fallback + serialport if installed)' : 'serialport npm ready')
+    : 'no serial support (install: npm install serialport)'}`);
   const capStatus = packetBackend.isAvailable()
     ? 'cap npm ready (send+capture)'
     : packetBackend.isTcpdumpAvailable()

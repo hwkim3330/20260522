@@ -68,16 +68,14 @@ async function dispatch(command, payload, services) {
     case 'seriallist': {
       if (!serialBridge.isAvailable()) return { ttys: [], ports: [] };
       const ports = await serialBridge.list();
-      const arr   = ports.map(p => ({ path: p.path, name: p.path }));
-      return { ttys: arr, ports: arr };
+      return { ttys: ports, ports };
     }
 
     case 'serialstatus': {
       if (!serialBridge.isAvailable()) return { open: false, connected: false, ttys: [], ports: [] };
       const st    = serialBridge.getStatus();
       const ports = await serialBridge.list();
-      const arr   = ports.map(p => ({ path: p.path, name: p.path }));
-      return { open: st.open, connected: st.open, session: st.session, ttys: arr, ports: arr };
+      return { open: st.open, connected: st.open, session: st.session, ttys: ports, ports };
     }
 
     case 'serialopen': {

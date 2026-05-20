@@ -1,11 +1,20 @@
 'use strict';
 /**
  * serialBridge.js — Native Node.js serial port manager.
- * Used as fallback when C# worker is not connected (Linux / headless).
- * Exposes same event shape as C# worker: { kind:'serial', rxType:'rx', hex, session }
+ *
+ * Two-tier strategy:
+ *  1. If `serialport` npm is installed → use it (best, works on all OS)
+ *  2. Else (Linux only) → scan /dev for ttyUSB*/ttyACM*/ttyS* and open via
+ *     stty + fs streams (no native build required)
+ *
+ * Public API: list, open, close, write, setSignals, command, getStatus, getSession, isAvailable, events
  */
 
 const { EventEmitter } = require('events');
+const fs   = require('fs');
+const path = require('path');
+const { execFile, spawn } = require('child_process');
+const os   = require('os');
 
 let SerialPort;
 try { ({ SerialPort } = require('serialport')); } catch {}
@@ -13,64 +22,128 @@ try { ({ SerialPort } = require('serialport')); } catch {}
 const events = new EventEmitter();
 events.setMaxListeners(200);
 
-// sessions: Map<string, SerialSession>
-const sessions = new Map();
+const sessions = new Map(); // Map<sessionId, SerialSession>
+
+// ── Linux /dev scanner ────────────────────────────────────────────────────────
+
+/** Read a single-line sysfs file, trimmed. Returns '' on error. */
+function sysfsRead(filePath) {
+  try { return fs.readFileSync(filePath, 'utf8').trim(); } catch { return ''; }
+}
+
+/**
+ * For a given tty name (e.g. 'ttyUSB0'), walk sysfs to find USB product info.
+ * Path: /sys/class/tty/{name}/device -> symlink to USB interface directory
+ * USB device attrs are one level up (e.g. ../idVendor, ../product)
+ */
+function usbInfoFromSysfs(ttyName) {
+  try {
+    const devDir  = `/sys/class/tty/${ttyName}/device`;
+    const target  = fs.readlinkSync(devDir); // e.g. ../../../1-1.2:1.0
+    // The parent dir of the interface is the USB device
+    const usbDir  = path.resolve(path.dirname(devDir), target, '..');
+    const product = sysfsRead(`${usbDir}/product`);
+    const mfr     = sysfsRead(`${usbDir}/manufacturer`);
+    const vendor  = sysfsRead(`${usbDir}/idVendor`);
+    const prodId  = sysfsRead(`${usbDir}/idProduct`);
+    return { product, manufacturer: mfr, usbVendorId: vendor, usbProductId: prodId };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Scan /dev for known TTY patterns and enrich with sysfs metadata.
+ * Priority order: ttyUSB > ttyACM > ttyAMA > ttyS (skip ttyS if no sysfs device link)
+ */
+async function listLinuxTty() {
+  if (os.platform() !== 'linux') return [];
+  let entries;
+  try { entries = await fs.promises.readdir('/dev'); } catch { return []; }
+
+  const USB = entries.filter(n => /^ttyUSB\d+$/.test(n)).sort();
+  const ACM = entries.filter(n => /^ttyACM\d+$/.test(n)).sort();
+  const AMA = entries.filter(n => /^ttyAMA\d+$/.test(n)).sort();
+  // Only include ttyS* that have a real device symlink in sysfs
+  const SER = entries.filter(n => /^ttyS\d+$/.test(n)).sort().filter(n => {
+    try { fs.readlinkSync(`/sys/class/tty/${n}/device`); return true; } catch { return false; }
+  });
+
+  const all = [...USB, ...ACM, ...AMA, ...SER];
+  return all.map(name => {
+    const devPath = `/dev/${name}`;
+    // Check if accessible (don't require root — just test stat)
+    try { fs.statSync(devPath); } catch { return null; }
+    const usb  = usbInfoFromSysfs(name);
+    const label = usb.product
+      ? `${name}  (${usb.product}${usb.manufacturer ? ' / ' + usb.manufacturer : ''})`
+      : name;
+    return {
+      path:         devPath,
+      name:         devPath,
+      displayName:  label,
+      manufacturer: usb.manufacturer || '',
+      usbProduct:   usb.product || '',
+      usbVendorId:  usb.usbVendorId || '',
+      usbProductId: usb.usbProductId || '',
+    };
+  }).filter(Boolean);
+}
+
+// ── Serialport-based session ──────────────────────────────────────────────────
 
 class SerialSession {
-  constructor(path) {
-    this.path      = path;
+  constructor(devPath) {
+    this.path       = devPath;
     this.lineBuffer = '';
-    this._cmdQueue  = []; // { resolve, reject, timer }
+    this._cmdQueue  = [];
+    this._type      = 'serialport'; // or 'stty'
   }
 
   open(opts = {}) {
-    if (!SerialPort) return Promise.reject(new Error('serialport npm not installed'));
+    if (!SerialPort) return Promise.reject(new Error('serialport npm not installed — run: npm install serialport'));
     return new Promise((resolve, reject) => {
       this.port = new SerialPort({
-        path:      this.path,
-        baudRate:  opts.baudRate  ?? 115200,
-        dataBits:  opts.dataBits  ?? 8,
-        stopBits:  opts.stopBits  ?? 1,
-        parity:    opts.parity    ?? 'none',
-        autoOpen:  false,
+        path:     this.path,
+        baudRate: opts.baudRate ?? 115200,
+        dataBits: opts.dataBits ?? 8,
+        stopBits: opts.stopBits ?? 1,
+        parity:   opts.parity   ?? 'none',
+        autoOpen: false,
       });
 
-      this.port.on('data', (chunk) => {
-        const hex = chunk.toString('hex');
-        events.emit('serial', { kind: 'serial', rxType: 'rx', hex, session: this.path });
-
-        // Accumulate for command responses
-        this.lineBuffer += chunk.toString('utf8');
-        const parts = this.lineBuffer.split(/\r?\n/);
-        this.lineBuffer = parts.pop() ?? '';
-
-        for (const line of parts) {
-          const t = line.trim();
-          if (!t) continue;
-          if (this._cmdQueue.length > 0 && (t.startsWith('OK') || t.startsWith('ERR'))) {
-            const { resolve: res, reject: rej, timer } = this._cmdQueue.shift();
-            clearTimeout(timer);
-            if (t.startsWith('OK')) res(t.slice(2).trim());
-            else                    rej(new Error(t.slice(3).trim() || 'ERR'));
-          }
-        }
-      });
-
+      this.port.on('data', chunk => this._onData(chunk));
       this.port.on('close', () => {
         sessions.delete(this.path);
         events.emit('serial', { kind: 'serial', type: 'closed', session: this.path });
       });
-
-      this.port.on('error', (err) => {
+      this.port.on('error', err => {
         events.emit('serial', { kind: 'serial', type: 'error', message: err.message, session: this.path });
       });
-
-      this.port.open((err) => { if (err) reject(err); else resolve(); });
+      this.port.open(err => { if (err) reject(err); else resolve(); });
     });
   }
 
+  _onData(chunk) {
+    const hex = chunk.toString('hex');
+    events.emit('serial', { kind: 'serial', rxType: 'rx', hex, session: this.path });
+
+    this.lineBuffer += chunk.toString('utf8');
+    const parts = this.lineBuffer.split(/\r?\n/);
+    this.lineBuffer = parts.pop() ?? '';
+    for (const line of parts) {
+      const t = line.trim();
+      if (!t) continue;
+      if (this._cmdQueue.length > 0 && (t.startsWith('OK') || t.startsWith('ERR'))) {
+        const { resolve: res, reject: rej, timer } = this._cmdQueue.shift();
+        clearTimeout(timer);
+        if (t.startsWith('OK')) res(t.slice(2).trim()); else rej(new Error(t.slice(3).trim() || 'ERR'));
+      }
+    }
+  }
+
   close() {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       if (!this.port) { resolve(); return; }
       this.port.close(() => resolve());
     });
@@ -80,16 +153,15 @@ class SerialSession {
     if (!this.port) return Promise.reject(new Error(`Session not open: ${this.path}`));
     const data = hex ? Buffer.from(hex, 'hex') : Buffer.from(text ?? '', 'utf8');
     return new Promise((resolve, reject) => {
-      this.port.write(data, (err) => err ? reject(err) : resolve());
+      this.port.write(data, err => err ? reject(err) : resolve());
     });
   }
 
   setSignals(signals) {
     if (!this.port) return Promise.resolve();
-    return new Promise((resolve) => { this.port.set(signals, () => resolve()); });
+    return new Promise(resolve => { this.port.set(signals, () => resolve()); });
   }
 
-  /** Send a text command and wait for OK/ERR response line. */
   command(cmd, timeoutMs = 3000) {
     if (!this.port) return Promise.reject(new Error('Serial port not open'));
     return new Promise((resolve, reject) => {
@@ -98,10 +170,129 @@ class SerialSession {
         if (i >= 0) this._cmdQueue.splice(i, 1);
         reject(new Error('Serial command timeout'));
       }, timeoutMs);
-
       this._cmdQueue.push({ resolve, reject, timer });
-      const line = (cmd.endsWith('\n') ? cmd : cmd + '\r\n');
-      this.port.write(Buffer.from(line, 'utf8'), (err) => {
+      const line = cmd.endsWith('\n') ? cmd : cmd + '\r\n';
+      this.port.write(Buffer.from(line, 'utf8'), err => {
+        if (err) {
+          const i = this._cmdQueue.findIndex(q => q.timer === timer);
+          if (i >= 0) this._cmdQueue.splice(i, 1);
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+    });
+  }
+}
+
+// ── stty-based session (Linux fallback, no serialport npm) ────────────────────
+
+class SttySession {
+  constructor(devPath) {
+    this.path       = devPath;
+    this.lineBuffer = '';
+    this._cmdQueue  = [];
+    this._fd        = null;
+    this._reader    = null;
+  }
+
+  open(opts = {}) {
+    const baud = opts.baudRate ?? 115200;
+    const dev  = this.path;
+
+    return new Promise((resolve, reject) => {
+      // Configure the port with stty
+      execFile('stty', ['-F', dev,
+        String(baud), 'raw', '-echo',
+        'cs8', '-cstopb', '-parenb',
+        'min', '1', 'time', '0',
+      ], (err) => {
+        if (err) { return reject(new Error(`stty failed: ${err.message}`)); }
+
+        // Open the device for read/write
+        fs.open(dev, fs.constants.O_RDWR | fs.constants.O_NOCTTY | fs.constants.O_NONBLOCK, (ferr, fd) => {
+          if (ferr) { return reject(new Error(`Cannot open ${dev}: ${ferr.message}`)); }
+          this._fd = fd;
+          this._startRead();
+          events.emit('serial', { kind: 'serial', type: 'opened', session: dev });
+          resolve();
+        });
+      });
+    });
+  }
+
+  _startRead() {
+    if (!this._fd) return;
+    const buf = Buffer.alloc(256);
+    const readLoop = () => {
+      if (this._fd === null) return;
+      fs.read(this._fd, buf, 0, buf.length, null, (err, bytesRead) => {
+        if (err) {
+          if (err.code === 'EAGAIN' || err.code === 'EWOULDBLOCK') {
+            // No data yet, wait a bit
+            setTimeout(readLoop, 20);
+            return;
+          }
+          events.emit('serial', { kind: 'serial', type: 'error', message: err.message, session: this.path });
+          return;
+        }
+        if (bytesRead > 0) {
+          const chunk = buf.slice(0, bytesRead);
+          const hex   = chunk.toString('hex');
+          events.emit('serial', { kind: 'serial', rxType: 'rx', hex, session: this.path });
+
+          this.lineBuffer += chunk.toString('utf8');
+          const parts = this.lineBuffer.split(/\r?\n/);
+          this.lineBuffer = parts.pop() ?? '';
+          for (const line of parts) {
+            const t = line.trim();
+            if (!t) continue;
+            if (this._cmdQueue.length > 0 && (t.startsWith('OK') || t.startsWith('ERR'))) {
+              const { resolve: res, reject: rej, timer } = this._cmdQueue.shift();
+              clearTimeout(timer);
+              if (t.startsWith('OK')) res(t.slice(2).trim()); else rej(new Error(t.slice(3).trim() || 'ERR'));
+            }
+          }
+        }
+        setTimeout(readLoop, 10);
+      });
+    };
+    readLoop();
+  }
+
+  close() {
+    return new Promise(resolve => {
+      const fd = this._fd;
+      this._fd = null;
+      if (fd === null) { resolve(); return; }
+      fs.close(fd, () => {
+        sessions.delete(this.path);
+        events.emit('serial', { kind: 'serial', type: 'closed', session: this.path });
+        resolve();
+      });
+    });
+  }
+
+  write({ hex, text }) {
+    if (this._fd === null) return Promise.reject(new Error(`Session not open: ${this.path}`));
+    const data = hex ? Buffer.from(hex, 'hex') : Buffer.from(text ?? '', 'utf8');
+    return new Promise((resolve, reject) => {
+      fs.write(this._fd, data, err => err ? reject(err) : resolve());
+    });
+  }
+
+  setSignals() { return Promise.resolve(); }
+
+  command(cmd, timeoutMs = 3000) {
+    if (this._fd === null) return Promise.reject(new Error('Serial port not open'));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const i = this._cmdQueue.findIndex(q => q.timer === timer);
+        if (i >= 0) this._cmdQueue.splice(i, 1);
+        reject(new Error('Serial command timeout'));
+      }, timeoutMs);
+      this._cmdQueue.push({ resolve, reject, timer });
+      const line = Buffer.from(cmd.endsWith('\n') ? cmd : cmd + '\r\n', 'utf8');
+      fs.write(this._fd, line, err => {
         if (err) {
           const i = this._cmdQueue.findIndex(q => q.timer === timer);
           if (i >= 0) this._cmdQueue.splice(i, 1);
@@ -116,25 +307,51 @@ class SerialSession {
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 async function list() {
-  if (!SerialPort) return [];
-  const ports = await SerialPort.list();
-  return ports.map(p => ({
-    path:         p.path,
-    name:         p.path,
-    manufacturer: p.manufacturer  || '',
-    serialNumber: p.serialNumber  || '',
-    usbVendorId:  p.vendorId      || '',
-    usbProductId: p.productId     || '',
-    usbProduct:   p.friendlyName  || p.manufacturer || '',
-  }));
+  // Try serialport first (all platforms, richest metadata)
+  if (SerialPort) {
+    try {
+      const ports = await SerialPort.list();
+      if (ports.length > 0) {
+        return ports.map(p => ({
+          path:         p.path,
+          name:         p.path,
+          displayName:  p.friendlyName || p.manufacturer
+            ? `${p.path}${p.manufacturer ? '  (' + p.manufacturer + ')' : ''}`
+            : p.path,
+          manufacturer: p.manufacturer  || '',
+          usbProduct:   p.friendlyName  || '',
+          usbVendorId:  p.vendorId      || '',
+          usbProductId: p.productId     || '',
+          serialNumber: p.serialNumber  || '',
+        }));
+      }
+    } catch { /* fall through to sysfs scan */ }
+  }
+
+  // Linux fallback: scan /dev directly
+  const linuxPorts = await listLinuxTty();
+  if (linuxPorts.length > 0) return linuxPorts;
+
+  return [];
 }
 
-async function open(path, opts = {}) {
-  if (sessions.has(path)) return { sessionId: path, session: path };
-  const s = new SerialSession(path);
-  await s.open(opts);
-  sessions.set(path, s);
-  return { sessionId: path, session: path };
+async function open(devPath, opts = {}) {
+  if (!devPath) throw new Error('포트 경로가 비어있습니다');
+  if (sessions.has(devPath)) return { sessionId: devPath, session: devPath };
+
+  let session;
+  if (SerialPort) {
+    session = new SerialSession(devPath);
+  } else if (os.platform() === 'linux') {
+    // Check stty is available
+    session = new SttySession(devPath);
+  } else {
+    throw new Error('serialport npm이 설치되지 않았습니다. 실행: npm install serialport');
+  }
+
+  await session.open(opts);
+  sessions.set(devPath, session);
+  return { sessionId: devPath, session: devPath };
 }
 
 async function close(sessionId) {
@@ -172,6 +389,9 @@ function getSession(preferredId) {
   return sessions.keys().next().value ?? null;
 }
 
-function isAvailable() { return !!SerialPort; }
+/** Returns true if at least one communication method is available */
+function isAvailable() {
+  return !!SerialPort || os.platform() === 'linux';
+}
 
 module.exports = { list, open, close, write, setSignals, command, getStatus, getSession, isAvailable, events };
