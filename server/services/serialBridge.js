@@ -4,7 +4,7 @@
  *
  * Two-tier strategy:
  *  1. If `serialport` npm is installed → use it (best, works on all OS)
- *  2. Else (Linux only) → scan /dev for ttyUSB*/ttyACM*/ttyS* and open via
+ *  2. Else (Linux only) → scan /dev for ttyUSB, ttyACM, ttyS devices and open via
  *     stty + fs streams (no native build required)
  *
  * Public API: list, open, close, write, setSignals, command, getStatus, getSession, isAvailable, events

@@ -36,14 +36,14 @@
   <div class="wrap">
     <div class="hero">
       <h1>Switch Deep Test Report</h1>
-      <div>2026-05-19T02:20:25.985Z</div>
+      <div>2026-05-20T04:44:21.068Z</div>
       <p>Known-unicast validation. Local http://localhost:8080 · Peer http://172.31.51.213:8080 · 3 trials · 5 frames/trial · up to 3 measurement attempts/trial. Destination MAC and capture BPF are pinned per port pair.</p>
     </div>
     <div class="cards">
       <div class="card"><span>Total Frames</span><strong>60</strong></div>
       <div class="card"><span>Matched</span><strong>60</strong></div>
       <div class="card"><span>Clean Directions</span><strong>4/4</strong></div>
-      <div class="card"><span>Avg Trial Runtime</span><strong>3367 ms</strong></div>
+      <div class="card"><span>Avg Trial Runtime</span><strong>3140 ms</strong></div>
       <div class="card"><span>Setup Retries</span><strong>0</strong></div>
     </div>
     <div class="topology">
@@ -98,13 +98,13 @@
     new Chart(document.getElementById('accounting'),{type:'bar',data:{labels,datasets:[
       {label:'Sent frames',data:[15,15,15,15],backgroundColor:'#94a3b8'},
       {label:'Marker matched',data:[15,15,15,15],backgroundColor:'#16a34a'},
-      {label:'Captured rows',data:[15,15,15,15],backgroundColor:'#0f6f78'}
+      {label:'Captured rows',data:[15,15,18,15],backgroundColor:'#0f6f78'}
     ]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
     new Chart(document.getElementById('rx'),{type:'bar',data:{labels,datasets:[{label:'RX %',data:[100,100,100,100],backgroundColor:'#0f6f78'}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{min:0,max:100}}}});
-    new Chart(document.getElementById('elapsed'),{type:'line',data:{labels:["Trial 1","Trial 2","Trial 3"],datasets:[{"label":"Local enp1s0f1 -> Peer 이더넷 2","data":[3637,3259,3164],"borderColor":"#0f6f78","backgroundColor":"#0f6f78","tension":0.25},{"label":"Local enp1s0f3 -> Peer 이더넷","data":[3271,3232,3176],"borderColor":"#f59e0b","backgroundColor":"#f59e0b","tension":0.25},{"label":"Peer 이더넷 2 -> Local enp1s0f1","data":[3613,3437,3469],"borderColor":"#2563eb","backgroundColor":"#2563eb","tension":0.25},{"label":"Peer 이더넷 -> Local enp1s0f3","data":[3410,3368,3371],"borderColor":"#16a34a","backgroundColor":"#16a34a","tension":0.25}]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:false,title:{display:true,text:'ms'}}}}});
+    new Chart(document.getElementById('elapsed'),{type:'line',data:{labels:["Trial 1","Trial 2","Trial 3"],datasets:[{"label":"Local enp1s0f1 -> Peer 이더넷 2","data":[3246,3468,3234],"borderColor":"#0f6f78","backgroundColor":"#0f6f78","tension":0.25},{"label":"Local enp1s0f3 -> Peer 이더넷","data":[3185,3443,3284],"borderColor":"#f59e0b","backgroundColor":"#f59e0b","tension":0.25},{"label":"Peer 이더넷 2 -> Local enp1s0f1","data":[3135,2843,3107],"borderColor":"#2563eb","backgroundColor":"#2563eb","tension":0.25},{"label":"Peer 이더넷 -> Local enp1s0f3","data":[2903,2760,3076],"borderColor":"#16a34a","backgroundColor":"#16a34a","tension":0.25}]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:false,title:{display:true,text:'ms'}}}}});
     new Chart(document.getElementById('api'),{type:'bar',data:{labels,datasets:[
       {label:'API errors',data:[0,0,0,0],backgroundColor:'#dc2626'},
-      {label:'Avg runtime ms',data:[3353,3226,3506,3383],backgroundColor:'#f59e0b',yAxisID:'y1'}
+      {label:'Avg runtime ms',data:[3316,3304,3028,2913],backgroundColor:'#f59e0b',yAxisID:'y1'}
     ]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,ticks:{precision:0}},y1:{position:'right',beginAtZero:true,grid:{drawOnChartArea:false},title:{display:true,text:'ms'}}}}});
   </script>
 </body>
