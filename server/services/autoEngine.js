@@ -1,8 +1,7 @@
 'use strict';
 /**
  * autoEngine.js — Node.js automation test runner.
- * Used as fallback when C# worker is not connected (Linux / headless).
- * Test cases are loaded from logs/tests/test-cases.json (same file as testcases.js).
+ * Test cases are loaded from logs/tests/test-cases.json.
  */
 const path = require('path');
 const fs   = require('fs');
