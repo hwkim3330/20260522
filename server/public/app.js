@@ -102,6 +102,7 @@ function initTabs() {
       tab.classList.add('active');
       $(tab.dataset.view)?.classList.add('active');
       if (tab.dataset.view === 'hyperTermView') refreshSerialStatus();
+      if (tab.dataset.view === 'settingsView') { refreshSettings(); loadLogs(); }
       if (tab.dataset.view === 'packetGenView') {
         renderPacketList();
         updateTcUI();
@@ -3504,12 +3505,37 @@ async function sendSerial() {
 
 // ── Logs ──────────────────────────────────────────────────────────────────────
 async function loadLogs() {
+  const box=$('logsBox');if(!box)return;
   try{
-    const data=await api('/api/logs');const box=$('logsBox');if(!box)return;
-    const fmtEntry=(e,kind)=>{if(e.error)return `[${kind}] parse error: ${e.file}\n`;const ts=e.startedAt||e.timestamp||e.createdAt||'',name=e.name||e.testName||e.macroName||e.id||'?',result=e.result||e.status||(e.passed!=null?(e.passed?'PASS':'FAIL'):'');return `${ts?new Date(ts).toLocaleString()+'  '  :''}[${kind}] ${name}  ${result}\n`;};
-    const tests=(data.tests||[]).map(e=>fmtEntry(e,'TEST')),macros=(data.macros||[]).map(e=>fmtEntry(e,'MACRO'));
-    const all=[...tests,...macros];box.textContent=all.length?all.join(''):  '(no logs yet)';
-  }catch(err){if($('logsBox'))$('logsBox').textContent=`Log load failed: ${err.message}`;}
+    const [ar,sr]=await Promise.allSettled([api('/api/auto/results'),api('/api/auto/status')]);
+    const rows=(ar.status==='fulfilled'?ar.value.rows:null)||[];
+    const st=sr.status==='fulfilled'?sr.value:{};
+    const lines=[];
+    if(st.running)lines.push(`▶ Running: ${st.test||''}  ${st.statusText||''}`);
+    else if(st.result)lines.push(`■ Last run: ${st.test||'?'}  ${st.result}  (${st.startedAt?new Date(st.startedAt).toLocaleString():''})`);
+    rows.forEach(r=>lines.push(`  [${r.result}] Step ${r.step}  ${r.name}${r.detail?'  '+r.detail:''}`));
+    box.textContent=lines.length?lines.join('\n'):'(no test runs yet — run a test from Scenario Lab or HyperTerminal → Auto)';
+  }catch(err){box.textContent=`Log load failed: ${err.message}`;}
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+async function refreshSettings() {
+  try {
+    const [hr, rr] = await Promise.allSettled([api('/api/health'), api('/api/register/status')]);
+    const h = hr.status==='fulfilled' ? hr.value : {};
+    const capOk = h.packets?.cap, tdOk = h.packets?.tcpdump;
+    const packetSt = capOk ? '● cap npm  (send+capture)' : tdOk ? '● tcpdump  (capture only)' : '○ none  (install Npcap + npm install cap)';
+    const serialOk = h.serial?.available;
+    const platform = h.platform==='win32' ? 'Windows (Npcap)' : h.platform==='linux' ? 'Linux (libpcap)' : h.platform||'—';
+    if($('settingsPlatform'))$('settingsPlatform').textContent=platform;
+    if($('settingsPackets'))$('settingsPackets').textContent=packetSt;
+    if($('settingsSerial'))$('settingsSerial').textContent=serialOk?`● available${h.serial?.open?' (open)':''}` :'○ not available';
+    if($('settingsVersion'))$('settingsVersion').textContent=h.server?.version||'—';
+    const r = rr.status==='fulfilled' ? rr.value : {};
+    const workerSt = `${r.serialConnected?'● serial connected':'○ serial disconnected'}  base: ${r.baseAddress||'—'}`;
+    if($('settingsWorkerState'))$('settingsWorkerState').textContent=workerSt;
+    if($('settingsBaseAddr')&&r.baseAddress)$('settingsBaseAddr').value=r.baseAddress;
+  } catch {}
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -3523,7 +3549,7 @@ function updateStatusBar() {
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function initWebSocket() {
   const ws=new WebSocket(`ws://${location.host}`);
-  ws.onmessage=({data})=>{try{const msg=JSON.parse(data);if(msg.type==='workerEvent'){const p=msg.payload||{};if(p.type==='serialData'||p.type==='terminal'){appendSeqTerm(p.text||p.data||'');}}}catch{/*ignore*/}};
+  ws.onmessage=({data})=>{try{const msg=JSON.parse(data);if(msg.type==='workerEvent'){const p=msg.payload||{};if(p.kind==='serial'&&p.rxType==='rx'&&p.hex){const bytes=Uint8Array.from(p.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));}else if(p.type==='serialData'||p.type==='terminal'){appendSeqTerm(p.text||p.data||'');}}}catch{/*ignore*/}};
   ws.onclose=()=>setTimeout(initWebSocket,3000);
 }
 
@@ -3615,13 +3641,10 @@ async function init() {
 
   // Settings
   $('refreshLogs')?.addEventListener('click', loadLogs);
-  $('settingsWorkerRefresh')?.addEventListener('click', async ()=>{
-    try{const data=await api('/api/register/status');const el=$('settingsWorkerState');if(el)el.textContent=`${data.serialConnected?'● connected':'○ disconnected'}  base: ${data.baseAddress||'—'}`;if($('settingsBaseAddr')&&data.baseAddress)$('settingsBaseAddr').value=data.baseAddress;}
-    catch(err){if($('settingsWorkerState'))$('settingsWorkerState').textContent=`offline: ${err.message}`;}
-  });
+  $('settingsWorkerRefresh')?.addEventListener('click', refreshSettings);
   $('settingsBaseAddrApply')?.addEventListener('click', async ()=>{
     const val=$('settingsBaseAddr')?.value?.trim();if(!val)return;
-    try{await api('/api/register/base-addr',{method:'POST',body:JSON.stringify({address:val})});if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='Applied';setTimeout(()=>{if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='';},2000);await refreshRegStatus();}
+    try{await api('/api/register/base-addr',{method:'POST',body:JSON.stringify({address:val})});if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='Applied ✓';setTimeout(()=>{if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='';},2000);await refreshRegStatus();}
     catch(err){if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent=`Error: ${err.message}`;}
   });
 

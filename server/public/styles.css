@@ -789,3 +789,4 @@ button.toc-sub.toc-active { color: var(--accent); }
 #settingsView { display: none; background: var(--bg); }
 #settingsView.active { display: flex; }
 .settings-wrap { padding: 24px; overflow-y: auto; height: 100%; width: 100%; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; max-width: 960px; }

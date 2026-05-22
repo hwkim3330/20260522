@@ -888,8 +888,46 @@
     <!-- ══ TAB 4: Settings ════════════════════════════════════════════════════ -->
     <section id="settingsView" class="view">
       <div class="settings-wrap">
-        <div style="color:var(--accent);font-size:18px;font-weight:600;margin-bottom:12px;">Settings</div>
-        <div style="color:var(--muted);font-size:12px;">Configuration options will appear here in a future update.</div>
+        <div class="settings-grid">
+
+          <!-- Server Status -->
+          <div class="reg-card">
+            <div class="reg-card-title">SERVER STATUS</div>
+            <div style="font-size:11px;line-height:2;">
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Platform</span><span id="settingsPlatform">—</span></div>
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Packets</span><span id="settingsPackets">—</span></div>
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Serial</span><span id="settingsSerial">—</span></div>
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Version</span><span id="settingsVersion">—</span></div>
+            </div>
+            <div class="reg-card row" style="margin-top:10px;align-items:center;">
+              <button id="settingsWorkerRefresh" class="small">⟳ Refresh</button>
+              <span id="settingsWorkerState" style="font-size:10px;color:var(--muted);margin-left:8px;"></span>
+            </div>
+          </div>
+
+          <!-- Register Base Address -->
+          <div class="reg-card">
+            <div class="reg-card-title">REGISTER BASE ADDRESS</div>
+            <div class="field">
+              <label>Base Address (hex)</label>
+              <input id="settingsBaseAddr" class="mono" placeholder="0x44A00000" style="width:160px;">
+            </div>
+            <div class="reg-card row" style="margin-top:8px;align-items:center;">
+              <button id="settingsBaseAddrApply" class="small primary">Apply</button>
+              <span id="settingsBaseAddrSt" style="font-size:10px;color:var(--muted);margin-left:8px;"></span>
+            </div>
+          </div>
+
+          <!-- Activity Log -->
+          <div class="reg-card" style="grid-column:1/-1;">
+            <div class="reg-card-title" style="display:flex;justify-content:space-between;align-items:center;">
+              ACTIVITY LOG
+              <button id="refreshLogs" class="small">⟳ Refresh</button>
+            </div>
+            <pre id="logsBox" style="margin:4px 0 0;padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:3px;font-size:10px;height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;">(no logs yet)</pre>
+          </div>
+
+        </div>
       </div>
     </section>
 
@@ -898,6 +936,7 @@
   <!-- Status bar (22px, bottom) -->
   <div class="statusbar" id="statusBar">
     <span id="startTime">--</span>
+    <span id="statusExtra" style="margin-left:14px;color:var(--muted);"></span>
   </div>
 
 </div><!-- .shell -->
