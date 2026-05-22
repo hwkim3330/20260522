@@ -207,6 +207,8 @@
               <button id="scRowUp"   class="small" title="위로 이동">↑</button>
               <button id="scRowDown" class="small" title="아래로 이동">↓</button>
               <span class="toolbar-sep"></span>
+              <select id="scInterface" style="width:130px;font-size:11px;padding:2px 4px;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;" title="Interface for sequence run"><option value="">-- Interface --</option></select>
+              <span class="toolbar-sep"></span>
               <label class="check-inline"><input id="scRepeat" type="checkbox"> Repeat</label>
               <label class="check-inline"><input id="scFailIgnore" type="checkbox"> Fail 무시</label>
               <div class="spacer"></div>
@@ -936,6 +938,8 @@
   <!-- Status bar (22px, bottom) -->
   <div class="statusbar" id="statusBar">
     <span id="startTime">--</span>
+    <span class="led-dot" id="serverState" style="margin-left:10px;"></span>
+    <span id="status" style="margin-left:5px;">—</span>
     <span id="statusExtra" style="margin-left:14px;color:var(--muted);"></span>
   </div>
 

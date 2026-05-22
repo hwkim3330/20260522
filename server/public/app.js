@@ -57,7 +57,7 @@ function toast(msg, kind = 'info') {
 
 function setStatus(text, ok = true) {
   const s = $('status'); if (s) s.textContent = text;
-  const dot = $('serverState'); if (dot) dot.classList.toggle('bad', !ok);
+  const dot = $('serverState'); if (dot) dot.classList.toggle('connected', ok);
 }
 
 function populateInterfaceSelects() {
@@ -1538,7 +1538,7 @@ async function loadSequence() {
   try {
     const data = await api('/api/sequence/full');
     const items = data.items || [];
-    if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence (${items.length} events)`;
+    if ($('scDetailTitle')) $('scDetailTitle').textContent = `Test Sequence (${items.length} events)`;
     renderSequenceRows(items);
   } catch { renderSequenceRows([]); }
 }
@@ -2829,6 +2829,7 @@ function closeEventModal()     {}
 function addTcFromCurrent()    {}
 async function readRegister()  {}
 async function writeRegister() {}
+async function fdbCall()       {}
 
 async function refreshRegStatus() {
   try {
