@@ -50,6 +50,163 @@ function tcLoad(req) {
 }
 function tcSave(req, data) { fs.writeFileSync(tcFile(req), JSON.stringify(data, null, 2)); }
 
+// ── CSV helpers ───────────────────────────────────────────────────────────────
+const scenariosDir = path.join(__dirname, '..', 'testScenarios');
+
+function parseCsvRows(text) {
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim());
+  const headers = lines[0].split(',').map(h => h.trim().replace(/�+$/, ''));
+  return lines.slice(1).map(line => {
+    const cols = line.split(',');
+    const row = {};
+    headers.forEach((h, i) => { row[h] = (cols[i] || '').trim(); });
+    return row;
+  }).filter(r => Object.values(r).some(v => v));
+}
+
+function scanCsvFiles(dir, base) {
+  const result = [];
+  if (!fs.existsSync(dir)) return result;
+  for (const entry of fs.readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    const rel  = base ? `${base}/${entry}` : entry;
+    if (fs.statSync(full).isDirectory()) {
+      result.push(...scanCsvFiles(full, rel));
+    } else if (entry.endsWith('.csv')) {
+      result.push(rel);
+    }
+  }
+  return result;
+}
+
+function buildCsvTree(dir, base) {
+  const result = [];
+  if (!fs.existsSync(dir)) return result;
+  for (const entry of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, entry);
+    const rel  = base ? `${base}/${entry}` : entry;
+    if (fs.statSync(full).isDirectory()) {
+      result.push({ type: 'dir', name: entry, path: rel, children: buildCsvTree(full, rel) });
+    } else if (entry.endsWith('.csv')) {
+      result.push({ type: 'file', name: entry, path: rel, isPacket: entry.toLowerCase().includes('packet') });
+    }
+  }
+  return result;
+}
+
+// C# SyncCsvToGroups 로직과 동일:
+// - 서브폴더 1개 = 그룹 1개, 폴더 내 CSV 파일 1개 = TestCase 1개 (TC_ID로 분리 안 함)
+// - 루트 직속 TC CSV → "(root)" 그룹
+// TC_Packets.csv(패킷 정의 파일)는 별도 처리, 여기서는 제외
+function buildGroupsFromCsvs(all) {
+  const tcCsvs = all.filter(f => !path.basename(f).toLowerCase().includes('packet'));
+
+  // 루트 패킷 CSV 경로 (서브폴더 없는 것)
+  const rootPacketCsv = all.find(f => !f.includes('/') && path.basename(f).toLowerCase().includes('packet'));
+
+  // 폴더별로 묶기 (C# groupSpecs)
+  const byFolder = new Map(); // folderLabel → [relPaths]
+  for (const relPath of tcCsvs) {
+    const parts  = relPath.split('/');
+    const folder = parts.length > 1 ? parts[0] : '(root)';
+    if (!byFolder.has(folder)) byFolder.set(folder, []);
+    byFolder.get(folder).push(relPath);
+  }
+
+  const groups = [];
+  for (const [folder, paths] of byFolder) {
+    if (folder === '(root)') continue; // 루트 직속 TC CSV는 숨김 (서브폴더 그룹만 표시)
+    // 각 CSV 파일을 TestCaseEntry로 변환 (C# ImportCsvAsEntry: 파일 1개 = 엔트리 1개)
+    const cases = paths
+      .sort()
+      .map(relPath => {
+        const full  = path.join(scenariosDir, relPath);
+        const text  = fs.readFileSync(full, 'utf8');
+        const rows  = parseCsvRows(text);
+        // C#과 동일하게 TestScenarioId, TcId 순으로 정렬
+        rows.sort((a, b) => {
+          const sidA = parseInt(a['Test_Scenario_ID'] || '0');
+          const sidB = parseInt(b['Test_Scenario_ID'] || '0');
+          const tidA = parseInt(a['TC_ID'] || a['TC_Id'] || '0');
+          const tidB = parseInt(b['TC_ID'] || b['TC_Id'] || '0');
+          const idxA = parseInt(a['Index'] || '0');
+          const idxB = parseInt(b['Index'] || '0');
+          return (tidA - tidB) || (sidA - sidB) || (idxA - idxB);
+        });
+        const firstRow    = rows[0] || {};
+        const testScenId  = parseInt(firstRow['Test_Scenario_ID'] || '0');
+        const tcId        = parseInt(firstRow['TC_ID'] || firstRow['TC_Id'] || '0');
+        return {
+          id: crypto.randomUUID(),
+          name: path.basename(relPath, '.csv'),
+          path: relPath,
+          packetCsv: rootPacketCsv || null,
+          testScenarioId: testScenId,
+          tcId,
+          steps: rows
+        };
+      })
+      // C#과 동일: TestScenarioId → TcId → Name 순 정렬
+      .sort((a, b) => (a.testScenarioId - b.testScenarioId) || (a.tcId - b.tcId) || a.name.localeCompare(b.name));
+
+    if (cases.length)
+      groups.push({ id: crypto.randomUUID(), name: folder, cases });
+  }
+
+  // C# Groups 정렬: 그룹 내 min(TestScenarioId) 순
+  groups.sort((a, b) => {
+    const minA = Math.min(...a.cases.map(c => c.testScenarioId));
+    const minB = Math.min(...b.cases.map(c => c.testScenarioId));
+    return (minA - minB) || a.name.localeCompare(b.name);
+  });
+
+  return groups;
+}
+
+router.get('/testcases/csv-tree', (req, res) => {
+  try { res.json({ ok: true, tree: buildCsvTree(scenariosDir, '') }); }
+  catch (e) { wErr(res, e); }
+});
+
+router.get('/testcases/scan-scenarios', (req, res) => {
+  try {
+    const all   = scanCsvFiles(scenariosDir, '');
+    const files = all.filter(f => !path.basename(f).toLowerCase().includes('packet'));
+    res.json({ ok: true, files });
+  } catch (e) { wErr(res, e); }
+});
+
+router.post('/testcases/import-all-csv', (req, res) => {
+  try {
+    const all    = scanCsvFiles(scenariosDir, '');
+    const groups = buildGroupsFromCsvs(all);
+    tcSave(req, groups);
+    const tcCount = groups.reduce((s, g) => s + g.cases.length, 0);
+    res.json({ ok: true, imported: tcCount });
+  } catch (e) { wErr(res, e); }
+});
+
+router.get('/testcases/csv-content', (req, res) => {
+  try {
+    const relPath = req.query.path || '';
+    const full    = path.resolve(scenariosDir, relPath);
+    if (!full.startsWith(scenariosDir)) return res.status(400).json({ ok: false, error: 'Invalid path' });
+    const text    = fs.readFileSync(full, 'utf8');
+    const rows    = parseCsvRows(text);
+    res.json({ ok: true, rows, headers: rows.length ? Object.keys(rows[0]) : [] });
+  } catch (e) { wErr(res, e); }
+});
+
+router.post('/testcases/upload', (req, res) => {
+  try {
+    const { name, content } = req.body || {};
+    if (!name || !content) return res.status(400).json({ ok: false, error: 'name and content required' });
+    const dest = path.join(scenariosDir, path.basename(name));
+    fs.writeFileSync(dest, content);
+    res.json({ ok: true, path: path.basename(name) });
+  } catch (e) { wErr(res, e); }
+});
+
 router.get('/testcases/status', async (req, res) => {
   try {
     if (hasWorker(req)) return res.json({ ok: true, ...(await localCmd(req, 'testcasesstatus', {}, 5000) || {}) });
@@ -92,7 +249,16 @@ router.post('/testcases/select', async (req, res) => {
 
 router.post('/testcases/save-current', async (req, res) => {
   try {
-    if (hasWorker(req)) return res.json({ ok: true, ...(await localCmd(req, 'testcasessavecurrent', {}, 5000) || {}) });
+    if (hasWorker(req)) return res.json({ ok: true, ...(await localCmd(req, 'testcasessavecurrent', req.body, 5000) || {}) });
+    const { groupIndex = 0, tcIndex = 0, steps } = req.body || {};
+    const data = tcLoad(req);
+    const grp  = data[groupIndex];
+    if (!grp) return res.status(400).json({ ok: false, error: 'group not found' });
+    const cases = grp.cases || grp.testCases || [];
+    if (!cases[tcIndex]) return res.status(400).json({ ok: false, error: 'test case not found' });
+    cases[tcIndex] = { ...cases[tcIndex], steps: steps ?? seqLoad(req) };
+    if (!grp.cases) grp.testCases = cases; else grp.cases = cases;
+    tcSave(req, data);
     res.json({ ok: true, status: 'current-saved' });
   } catch (e) { wErr(res, e); }
 });
@@ -102,8 +268,12 @@ router.post('/testcases/delete', async (req, res) => {
     if (hasWorker(req)) return res.json({ ok: true, ...(await localCmd(req, 'testcasesdelete', req.body, 5000) || {}) });
     const data  = tcLoad(req);
     const { groupIndex, testCaseIndex } = req.body || {};
-    if (testCaseIndex !== undefined && data[groupIndex]?.cases) {
-      data[groupIndex].cases.splice(testCaseIndex, 1);
+    if (testCaseIndex !== undefined && groupIndex !== undefined) {
+      const grp = data[groupIndex];
+      if (grp) {
+        const cases = grp.cases || grp.testCases;
+        if (cases) cases.splice(testCaseIndex, 1);
+      }
     } else if (groupIndex !== undefined) {
       data.splice(groupIndex, 1);
     }
@@ -186,6 +356,35 @@ router.post('/sequence/events/clear', async (req, res) => {
     if (hasWorker(req)) return res.json({ ok: true, ...(await localCmd(req, 'sequenceclearevents', {}, 5000) || {}) });
     seqSave(req, []);
     res.json({ ok: true, status: 'events-cleared' });
+  } catch (e) { wErr(res, e); }
+});
+
+// ── Sequence bulk import ──────────────────────────────────────────────────────
+router.post('/sequence/import', async (req, res) => {
+  try {
+    let incoming = req.body?.items || req.body;
+    if (!Array.isArray(incoming)) incoming = incoming ? [incoming] : [];
+    seqSave(req, incoming);
+    res.json({ ok: true, count: incoming.length });
+  } catch (e) { wErr(res, e); }
+});
+
+// ── Test-case bulk import (JSON) ──────────────────────────────────────────────
+router.post('/testcases/import', async (req, res) => {
+  try {
+    let incoming = req.body?.groups || req.body;
+    if (!Array.isArray(incoming)) incoming = incoming ? [incoming] : [];
+    const cur = tcLoad(req);
+    incoming.forEach(g => {
+      if (!g || !g.name) return;
+      if (!g.id) g = { ...g, id: crypto.randomUUID() };
+      const cases = (g.cases || g.testCases || []).map(c => c.id ? c : { ...c, id: crypto.randomUUID() });
+      g = { ...g, cases };
+      const i = cur.findIndex(x => x.name === g.name);
+      if (i >= 0) cur[i] = { ...cur[i], ...g }; else cur.push(g);
+    });
+    fs.writeFileSync(tcFile(req), JSON.stringify(cur, null, 2));
+    res.json({ ok: true, count: incoming.length });
   } catch (e) { wErr(res, e); }
 });
 
