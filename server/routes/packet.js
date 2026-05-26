@@ -2,47 +2,84 @@
 const { Router } = require('express');
 const router = Router();
 
-function wErr(res, err) {
-  res.status(503).json({ ok: false, error: err.message });
+function workerErr(res, err) {
+  res.status(err.workerError ? 502 : 503).json({ ok: false, error: err.message });
+}
+
+function hasWorker(req) {
+  const { workerHub, localWorkerId } = req.app.locals;
+  return workerHub.hasWorker(localWorkerId);
 }
 
 // GET /api/interfaces
 router.get('/interfaces', async (req, res) => {
   try {
+    if (hasWorker(req)) {
+      const data = await req.app.locals.localCmd('getInterfaces');
+      const interfaces = data?.interfaces ?? [];
+      return res.json({ ok: true, interfaces, stdout: { interfaces } });
+    }
     const interfaces = req.app.locals.packetBackend.listInterfaces();
     res.json({ ok: true, interfaces, stdout: { interfaces } });
-  } catch (err) { wErr(res, err); }
+  } catch (err) { workerErr(res, err); }
 });
 
 // POST /api/build
 router.post('/build', async (req, res) => {
   try {
+    // When blocks array is present use local builder directly (respects user-defined block order)
+    if (hasWorker(req) && !(req.body || {}).blocks) {
+      try {
+        const data = await req.app.locals.localCmd('build', req.body || {});
+        return res.json({ ok: true, ...(data || {}), stdout: data || {} });
+      } catch (e) {
+        // Build is preview-only — always fall back to local builder on any worker error
+        if (!e.workerError) throw e;
+      }
+    }
+    // Local frame builder handles all protocols including 'ipv4', 'raw', etc.
+    // _preview: true suppresses the 60-byte Ethernet minimum padding (display only)
     const { buildFrame, normalizeProfile } = require('../services/frameBuilder');
-    const { decodeFrame } = require('../services/packetBackend');
-    const frame   = buildFrame(normalizeProfile(req.body || {}));
-    const decoded = decodeFrame(frame);
-    const data    = { frameHex: frame.toString('hex'), frameLength: frame.length, decoded };
+    const frame = buildFrame(normalizeProfile({ ...(req.body || {}), _preview: true }), 0);
+    const data  = { frameHex: frame.toString('hex'), frameLength: frame.length };
     res.json({ ok: true, ...data, stdout: data });
-  } catch (err) { wErr(res, err); }
+  } catch (err) { workerErr(res, err); }
 });
 
 // POST /api/send
 router.post('/send', async (req, res) => {
   try {
+    if (hasWorker(req)) {
+      try {
+        const data = await req.app.locals.localCmd('send', req.body || {}, 30000);
+        return res.json({ ok: true, ...(data || {}), stdout: data || {} });
+      } catch (e) {
+        // C# doesn't support this protocol — fall through to native frameBuilder
+        if (!e.workerError || !/unsupported protocol/i.test(e.message)) throw e;
+      }
+    }
     const result = await req.app.locals.packetBackend.sendPackets(req.body || {});
     res.json({ ok: true, ...result, stdout: result });
-  } catch (err) { wErr(res, err); }
+  } catch (err) { workerErr(res, err); }
 });
 
 // POST /api/packet/send (alias)
 router.post('/packet/send', async (req, res) => {
   try {
+    if (hasWorker(req)) {
+      try {
+        const data = await req.app.locals.localCmd('send', req.body || {}, 30000);
+        return res.json({ ok: true, ...(data || {}), stdout: data || {} });
+      } catch (e) {
+        if (!e.workerError || !/unsupported protocol/i.test(e.message)) throw e;
+      }
+    }
     const result = await req.app.locals.packetBackend.sendPackets(req.body || {});
     res.json({ ok: true, ...result, stdout: result });
-  } catch (err) { wErr(res, err); }
+  } catch (err) { workerErr(res, err); }
 });
 
-// POST /api/probe-node  — server-side proxy to avoid browser CORS
+// POST /api/probe-node
 router.post('/probe-node', async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -51,9 +88,12 @@ router.post('/probe-node', async (req, res) => {
     const resp = await fetch(`${base}/api/interfaces`, { signal: AbortSignal.timeout(5000) });
     const data = await resp.json();
     const ifaces = (data.interfaces ?? []).map(i => ({
-      key: i.key || i.name || '', name: i.name || i.key || '',
-      mac: i.mac || '', state: i.state || 'unknown', ipv4: i.ipv4 || [],
-      description: i.description || '',
+      key:  i.key || i.name || '',
+      name: i.name || i.key || '',
+      mac:  i.mac  || '',
+      state: i.state || 'unknown',
+      ipv4:  i.ipv4 || [],
+      description: i.description || ''
     }));
     res.json({ ok: true, url: base, interfaces: ifaces });
   } catch (err) { res.status(502).json({ ok: false, error: err.message }); }
@@ -66,19 +106,29 @@ router.get('/arp-lookup', async (req, res) => {
   try {
     const { execFile } = require('child_process');
     const { promisify } = require('util');
-    const { stdout } = await promisify(execFile)('arp', ['-a', ip]);
+    const exec = promisify(execFile);
+    const { stdout } = await exec('arp', ['-a', ip]);
     const match = stdout.match(/([0-9a-f]{2}[:\-][0-9a-f]{2}[:\-][0-9a-f]{2}[:\-][0-9a-f]{2}[:\-][0-9a-f]{2}[:\-][0-9a-f]{2})/i);
-    if (match) return res.json({ ok: true, mac: match[1].replace(/-/g, ':').toLowerCase(), ip });
+    if (match) {
+      const mac = match[1].replace(/-/g, ':').toLowerCase();
+      return res.json({ ok: true, mac, ip });
+    }
     res.json({ ok: false, error: 'not in ARP table', ip });
   } catch (err) { res.json({ ok: false, error: err.message }); }
 });
 
-// GET /api/worker/status — kept for UI compatibility, reports native backend
+// GET /api/worker/status
 router.get('/worker/status', async (req, res) => {
   try {
-    const st = req.app.locals.packetBackend.getCaptureStatus();
-    res.json({ ok: true, mode: 'native', workerId: 'native', capturing: st.capturing, captureCount: st.captureCount, captureInterfaces: st.captureInterfaces });
-  } catch (err) { wErr(res, err); }
+    if (hasWorker(req)) {
+      const data = await req.app.locals.localCmd('status');
+      return res.json({ ok: true, ...(data || {}) });
+    }
+    const pb = req.app.locals.packetBackend;
+    const st = pb.getCaptureStatus();
+    res.json({ ok: true, workerId: 'local', capturing: st.capturing, captureCount: st.captureCount,
+               captureInterfaces: st.captureInterfaces });
+  } catch (err) { workerErr(res, err); }
 });
 
 module.exports = router;

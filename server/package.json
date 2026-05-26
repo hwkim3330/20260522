@@ -1,7 +1,7 @@
 {
   "name": "packet-lab-manager-server",
   "version": "1.0.0",
-  "description": "Packet Lab Manager Server — Node.js native (Windows Npcap + Linux libpcap)",
+  "description": "Packet Lab Manager Server — Windows (C# worker) & Linux (native) dual-mode",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

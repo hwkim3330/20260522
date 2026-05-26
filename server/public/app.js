@@ -4,6 +4,7 @@ const state = {
   interfaces: [],
   captureInterfaces: new Set(),
   captureRows: [],
+  captureIfaceFilter: new Set(), // empty = show all
   captureTimer: null,
   serialTimer: null,
   serialConnected: false,
@@ -80,6 +81,8 @@ function populateInterfaceSelects() {
     sel.innerHTML = '<option value="">-- iface --</option>' + state.interfaces.map(i => `<option value="${esc(i.name)}"${i.name===cur?' selected':''}>${esc(i.name)}${i.state==='up'?' ●':''}</option>`).join('');
     sel.value = cur;
   });
+  // Refresh portmap NIC dropdowns with updated interface list
+  if (_portmap.length) renderPortmapTable();
 }
 
 function esc(v) {
@@ -108,8 +111,9 @@ function initTabs() {
         updateTcUI();
       }
       if (tab.dataset.view === 'scenarioView') {
-        const tcActive = state.selectedSeqTcIdx >= 0 && state.selectedSeqTcIdx < state.tcSeqList.length;
-        if (!tcActive && !state.selectedCsvPath) {
+        const seqListActive = state.selectedSeqTcIdx >= 0 && state.selectedSeqTcIdx < state.tcSeqList.length;
+        if (!seqListActive && !state.selectedCsvPath) {
+          // Nothing selected in TEST CASES list — clear sequence panel
           state.selectedSeqTcIdx = -1;
           state.seqItems = [];
           const tbody = $('sequenceRows');
@@ -117,7 +121,12 @@ function initTabs() {
           const titleEl = $('scDetailTitle');
           if (titleEl) titleEl.textContent = 'TEST SEQUENCE — (select a TC)';
           $('csvTree')?.querySelectorAll('.csv-leaf, .csv-root-item')?.forEach(e => e.classList.remove('selected'));
-        } else if (!tcActive && state.seqItems.length) {
+        } else if (seqListActive) {
+          // tcSeqList TC is selected — re-render its rows in case they changed
+          const tc = state.tcSeqList[state.selectedSeqTcIdx];
+          if (tc) renderCsvSequence(tc.rows || []);
+        } else {
+          // selectedCsvPath is set (TC selected in csv tree or loaded via PG dropdown)
           renderCsvSequence(state.seqItems);
         }
         loadCsvTree();
@@ -138,6 +147,20 @@ async function refreshInterfaces() {
     await refreshCaptureStatus();
     setStatus(`Connected — ${state.interfaces.length} interfaces`);
   } catch (err) { setStatus(`Interfaces error: ${err.message}`, false); }
+}
+
+async function _silentRefreshInterfaces() {
+  try {
+    const data = await api('/api/interfaces');
+    const newIfaces = data.interfaces || [];
+    const cur = state.interfaces.map(i => i.name + i.state).join(',');
+    const nxt = newIfaces.map(i => i.name + i.state).join(',');
+    if (cur !== nxt) {
+      state.interfaces = newIfaces;
+      populateInterfaceSelects();
+      await refreshCaptureStatus();
+    }
+  } catch { /* silent */ }
 }
 
 // ── Packet Generator — block model ───────────────────────────────────────────
@@ -268,14 +291,22 @@ function selectBlock(bi) {
   renderBlockList(pkt);
   renderProtoFields(block);
   const t = $('fieldsTitle'); if (t) t.textContent = `Protocol Fields — ${block.type}`;
-  // Always refresh the hex highlight; use cache if available, else fetch
+  refreshDecodeTree(pkt);
   if (state.lastFrameHex) {
-    const ranges = calcLayerRanges(pkt.blocks);
-    const range  = ranges.get(block.type);
-    const hexEl  = $('hexdump');
+    // Re-highlight cached hex — no need to rebuild the frame
+    state.layerRanges = calcLayerRanges(pkt.blocks);
+    const range = state.layerRanges.get(block.type);
+    const hexEl = $('hexdump');
     if (hexEl) hexEl.innerHTML = renderHexHTML(state.lastFrameHex, range ? range.start : -1, range ? range.end : -1);
+  } else {
+    previewFrame().catch(() => {});
   }
-  previewFrame().catch(() => {});
+}
+
+let _previewDebounceTimer = null;
+function schedulePreview() {
+  clearTimeout(_previewDebounceTimer);
+  _previewDebounceTimer = setTimeout(() => previewFrame().catch(() => {}), 150);
 }
 
 function renderProtoFields(block) {
@@ -283,22 +314,39 @@ function renderProtoFields(block) {
   if (!body) return;
   const fields = BLOCK_FIELDS[block.type] || [];
   if (!fields.length) { body.innerHTML = '<p style="color:var(--muted);font-size:11px;padding:8px;">No configurable fields.</p>'; return; }
-  body.innerHTML = fields.map(f => `
+  body.innerHTML = fields.map(f => {
+    const val = block[f.id] ?? f.def;
+    const hFn = FIELD_HINT_FN[f.id];
+    const hint = hFn ? hFn(val) : '';
+    const hintHtml = hFn
+      ? `<span class="field-hint"${hint ? '' : ' style="display:none;"'}>${esc(hint)}</span>`
+      : '';
+    return `
     <div class="field">
-      <label>${esc(f.label)}</label>
-      <input id="pf-${f.id}" type="${f.type}" value="${esc(block[f.id] ?? f.def)}" placeholder="${esc(f.def)}">
-    </div>`).join('');
+      <label>${esc(f.label)}${hintHtml}</label>
+      <input id="pf-${f.id}" type="${f.type}" value="${esc(val)}" placeholder="${esc(f.def)}">
+    </div>`;
+  }).join('');
   fields.forEach(f => {
     const inp = $(`pf-${f.id}`);
     if (!inp) return;
-    inp.addEventListener('change', () => {
+    inp.addEventListener('input', () => {
       const pkt = getActivePackets()[state.selectedPacketIdx];
       const blk = pkt?.blocks[state.selectedBlockIdx];
       if (blk) {
-        blk[f.id] = f.type === 'number' ? Number(inp.value) : inp.value;
+        blk[f.id] = f.type === 'number' ? (inp.value === '' ? 0 : Number(inp.value)) : inp.value;
         state.lastFrameHex = '';
         state.layerRanges = new Map();
-        previewFrame().catch(() => {});
+        if (FIELD_HINT_FN[f.id]) {
+          const hintSpan = inp.closest('.field')?.querySelector('.field-hint');
+          if (hintSpan) {
+            const h = FIELD_HINT_FN[f.id](inp.value);
+            hintSpan.textContent = h;
+            hintSpan.style.display = h ? '' : 'none';
+          }
+        }
+        refreshDecodeTree(pkt);  // instant — no API call needed
+        schedulePreview();       // debounced hex dump via API
       }
     });
   });
@@ -448,16 +496,27 @@ function renderPacketList() {
       updateEstimatedTime();
     });
   });
+  updateEstimatedTime();
 }
 
-function updateEstimatedTime() {
-  const el = $('pgEstMs');
-  if (!el) return;
-  const periodMs = parseInt($('pgPeriod')?.value) || 0;
-  const count = getActivePackets().length;
-  if (!count || !periodMs) { el.textContent = '—'; return; }
-  el.textContent = `${count * periodMs} ms`;
+function _sortedByDisplayIdx(pkts) {
+  const isTc = state.activeList === 'tc';
+  const seqIdxByRef = new Map();
+  if (isTc) {
+    for (const row of _getSeqRows()) {
+      if ((row['EventType'] || '').toLowerCase() === 'packet') {
+        const ref = (row['FrameRef'] || '').trim();
+        if (ref && row['Index'] !== undefined) seqIdxByRef.set(ref, Number(row['Index']));
+      }
+    }
+  }
+  return pkts
+    .map((p, i) => ({ p, key: isTc ? (seqIdxByRef.get(p.name) ?? i) : i }))
+    .sort((a, b) => a.key - b.key)
+    .map(({ p }) => p);
 }
+
+function updateEstimatedTime() {}
 
 // Re-sorts state.tcPackets to match the packet event order in the current sequence.
 function _syncTcPacketsToSeq() {
@@ -635,29 +694,55 @@ function buildPacketPayload(pkt) {
   const iface    = pkt.interface || '';
   const periodMs = parseInt($('pgPeriod')?.value) || 0;
   const eth      = blocks.find(b => b.type === 'Ethernet') || {};
-  const ipv4     = blocks.find(b => b.type === 'IPv4')     || {};
+  const ipv4B    = blocks.find(b => b.type === 'IPv4');
   const tcpB     = blocks.find(b => b.type === 'TCP');
   const udpB     = blocks.find(b => b.type === 'UDP');
   const icmpB    = blocks.find(b => b.type === 'ICMP');
   const arpB     = blocks.find(b => b.type === 'ARP');
   const vlanB    = blocks.find(b => b.type === 'VLAN');
   const plB      = blocks.find(b => b.type === 'Payload') || {};
-  let protocol   = 'raw';
-  if (udpB)  protocol = 'udp';
-  if (tcpB)  protocol = 'tcp';
-  if (icmpB) protocol = 'icmp';
-  if (arpB)  protocol = 'arp';
-  const p = { protocol, interface: iface,
-    dstMac: eth.dstMac || 'FF:FF:FF:FF:FF:FF', srcMac: eth.srcMac || '00:00:00:00:00:00',
+  // Determine frame protocol — 'ipv4' = IPv4 header present but no transport layer block
+  let protocol = 'raw';
+  if (ipv4B)  protocol = 'ipv4';
+  if (udpB)   protocol = 'udp';
+  if (tcpB)   protocol = 'tcp';
+  if (icmpB)  protocol = 'icmp';
+  if (arpB)   protocol = 'arp';
+  // Map IPv4 block's protocol text field → IP protocol number (used for raw IPv4 frames)
+  const ipv4Proto = (() => {
+    const s = ((ipv4B?.protocol) || '').toLowerCase();
+    if (s === 'udp')  return 17;
+    if (s === 'tcp')  return 6;
+    if (s === 'icmp') return 1;
+    const n = parseInt(s);
+    return isNaN(n) ? 0 : n;
+  })();
+  const p = {
+    protocol, interface: iface,
+    dstMac: eth.dstMac || 'FF:FF:FF:FF:FF:FF',
+    srcMac: eth.srcMac || '00:00:00:00:00:00',
     etherType: eth.etherType || '0x0800',
-    srcIp: ipv4.srcIp || '192.168.1.1', dstIp: ipv4.dstIp || '192.168.1.2',
-    ttl: ipv4.ttl || 64, tos: ipv4.tos || 0, count: 1, intervalMs: periodMs,
-    payload: { mode: plB.mode || 'text', data: plB.data || '' } };
-  if (udpB)  p.udp  = { srcPort: udpB.srcPort || 12345, dstPort: udpB.dstPort || 50000 };
-  if (tcpB)  p.tcp  = { srcPort: tcpB.srcPort || 1234,  dstPort: tcpB.dstPort || 80, flags: tcpB.flags || 2, seqNum: tcpB.seqNum || 0, ackNum: tcpB.ackNum || 0 };
-  if (icmpB) p.icmp = { type: icmpB.icmpType || 8, code: icmpB.icmpCode || 0 };
-  if (arpB)  p.arp  = { operation: arpB.operation || 1, senderMac: arpB.senderMac, senderIp: arpB.senderIp, targetMac: arpB.targetMac, targetIp: arpB.targetIp };
-  if (vlanB) p.vlan = { enabled: true, id: vlanB.vlanId || 100, priority: vlanB.priority || 0 };
+    ipv4: {
+      src:     (ipv4B?.srcIp)  || '192.168.1.1',
+      dst:     (ipv4B?.dstIp)  || '192.168.1.2',
+      ttl:     ipv4B?.ttl  != null ? Number(ipv4B.ttl)  : 64,
+      tos:     ipv4B?.tos  != null ? Number(ipv4B.tos)  : 0,
+      ipProto: ipv4Proto,
+    },
+    count: 1, intervalMs: periodMs,
+    payload: { mode: plB.mode || 'text', data: plB.data || '' },
+  };
+  if (udpB)  p.udp  = { srcPort: Number(udpB.srcPort) || 12345, dstPort: Number(udpB.dstPort) || 50000 };
+  if (tcpB)  p.tcp  = { srcPort: Number(tcpB.srcPort) || 1234, dstPort: Number(tcpB.dstPort) || 80,
+                         flags: Number(tcpB.flags) || 2, seq: Number(tcpB.seqNum) || 0, ack: Number(tcpB.ackNum) || 0 };
+  if (icmpB) p.icmp = { type: Number(icmpB.icmpType) || 8, code: Number(icmpB.icmpCode) || 0 };
+  if (arpB)  p.arp  = { operation: Number(arpB.operation) || 1,
+                         senderMac: arpB.senderMac || '00:00:00:00:00:00',
+                         senderIp:  arpB.senderIp  || '0.0.0.0',
+                         targetMac: arpB.targetMac || '00:00:00:00:00:00',
+                         targetIp:  arpB.targetIp  || '0.0.0.0' };
+  if (vlanB) p.vlan = { enabled: true, id: Number(vlanB.vlanId) || 100, priority: Number(vlanB.priority) || 0 };
+  p.blocks = blocks;
   return p;
 }
 
@@ -687,21 +772,14 @@ function getBlockSize(block) {
 }
 
 function calcLayerRanges(blocks) {
-  const has  = t => blocks.some(b => b.type === t);
-  const getb = t => blocks.find(b => b.type === t);
-  const map  = new Map();
+  const map = new Map();
   let off = 0;
-  if (has('Ethernet')) { map.set('Ethernet', { start: off, end: off + 14 }); off += 14; }
-  if (has('VLAN'))     { map.set('VLAN',     { start: off, end: off + 4  }); off += 4;  }
-  if (has('ARP'))      { map.set('ARP',      { start: off, end: off + 28 }); off += 28; }
-  if (has('IPv4'))     { map.set('IPv4',     { start: off, end: off + 20 }); off += 20; }
-  if (has('TCP'))      { map.set('TCP',      { start: off, end: off + 20 }); off += 20; }
-  else if (has('UDP')) { map.set('UDP',      { start: off, end: off + 8  }); off += 8;  }
-  else if (has('ICMP')){ map.set('ICMP',     { start: off, end: off + 8  }); off += 8;  }
-  if (has('Payload')) {
-    const pl = getb('Payload');
-    const len = getBlockSize(pl);
-    map.set('Payload', { start: off, end: off + len }); off += len;
+  for (const block of (blocks || [])) {
+    const size = getBlockSize(block);
+    if (size > 0) {
+      map.set(block.type, { start: off, end: off + size });
+      off += size;
+    }
   }
   return map;
 }
@@ -713,20 +791,37 @@ function renderHexHTML(hex, hiStart, hiEnd) {
   const lines = [];
   for (let off = 0; off < bytes.length; off += 16) {
     const chunk = bytes.slice(off, off + 16);
-    const hexParts = chunk.map((b, j) => {
+
+    // Wireshark style: left 8 bytes, 2-space gap, right 8 bytes
+    const makeHexHalf = (start, end) => {
+      const parts = [];
+      for (let j = start; j < end; j++) {
+        if (j < chunk.length) {
+          const cls = hi(off + j) ? ' class="hex-hi"' : '';
+          parts.push(`<span${cls}>${chunk[j]}</span>`);
+        } else {
+          parts.push('  '); // placeholder keeps column width fixed
+        }
+      }
+      return parts.join(' ');
+    };
+
+    // ASCII: insert a space gap after the 8th character
+    // Use a safe lookup table instead of esc() to avoid multi-char HTML entities
+    // that would break monospace column alignment
+    const ASCII_SAFE = { 38:'&amp;', 60:'&lt;', 62:'&gt;' }; // & < >
+    const asciiParts = [];
+    for (let j = 0; j < chunk.length; j++) {
+      if (j === 8) asciiParts.push(' ');
+      const n = parseInt(chunk[j], 16);
+      const ch = n >= 32 && n <= 126 ? (ASCII_SAFE[n] ?? String.fromCharCode(n)) : '.';
       const cls = hi(off + j) ? ' class="hex-hi"' : '';
-      return `<span${cls}>${b}</span>`;
-    });
-    const pad = '   '.repeat(16 - chunk.length);
-    const asciiParts = chunk.map((b, j) => {
-      const n = parseInt(b, 16);
-      const ch = n >= 32 && n <= 126 ? esc(String.fromCharCode(n)) : '.';
-      const cls = hi(off + j) ? ' class="hex-hi"' : '';
-      return `<span${cls}>${ch}</span>`;
-    });
+      asciiParts.push(`<span${cls}>${ch}</span>`);
+    }
+
     lines.push(
       `<span class="hex-off">${off.toString(16).padStart(4, '0')}</span>  ` +
-      hexParts.join(' ') + pad + `  ` +
+      makeHexHalf(0, 8) + '  ' + makeHexHalf(8, 16) + '  ' +
       `<span class="hex-ascii">${asciiParts.join('')}</span>`
     );
   }
@@ -804,8 +899,15 @@ function formatHex(hex) {
   const lines = [];
   for (let off = 0; off < bytes.length; off += 16) {
     const chunk = bytes.slice(off, off + 16);
-    const ascii = chunk.map(b => { const n = parseInt(b, 16); return n >= 32 && n <= 126 ? String.fromCharCode(n) : '.'; }).join('');
-    lines.push(`${off.toString(16).padStart(4,'0')}  ${chunk.join(' ').padEnd(47)}  ${ascii}`);
+    const h1 = chunk.slice(0, 8).join(' ');
+    const h2 = chunk.slice(8).join(' ');
+    const hexPart = (h1 + (chunk.length > 8 ? '  ' + h2 : '')).padEnd(49);
+    const ascii = chunk.map((b, i) => {
+      const n = parseInt(b, 16);
+      const c = n >= 32 && n <= 126 ? String.fromCharCode(n) : '.';
+      return i === 8 ? ' ' + c : c;
+    }).join('');
+    lines.push(`${off.toString(16).padStart(4,'0')}  ${hexPart}  ${ascii}`);
   }
   return lines.join('\n');
 }
@@ -820,9 +922,59 @@ function renderDecodeTree(obj, depth = 0) {
   }).join('\n');
 }
 
+function decodeFromBlocks(blocks) {
+  const tree = {};
+  for (const block of (blocks || [])) {
+    switch (block.type) {
+      case 'Ethernet':
+        tree.Ethernet = { dstMac: block.dstMac, srcMac: block.srcMac, etherType: block.etherType };
+        break;
+      case 'VLAN':
+        tree.VLAN = { id: block.vlanId ?? 100, priority: block.priority ?? 0 };
+        break;
+      case 'ARP':
+        tree.ARP = { operation: block.operation ?? 1,
+                     senderMac: block.senderMac, senderIp: block.senderIp,
+                     targetMac: block.targetMac, targetIp: block.targetIp };
+        break;
+      case 'IPv4':
+        tree.IPv4 = { src: block.srcIp, dst: block.dstIp,
+                      ttl: block.ttl ?? 64, tos: block.tos ?? 0,
+                      protocol: block.protocol || 0 };
+        break;
+      case 'TCP':
+        tree.TCP = { srcPort: block.srcPort ?? 1234, dstPort: block.dstPort ?? 80,
+                     flags: block.flags ?? 2, seqNum: block.seqNum ?? 0, ackNum: block.ackNum ?? 0 };
+        break;
+      case 'UDP':
+        tree.UDP = { srcPort: block.srcPort ?? 12345, dstPort: block.dstPort ?? 50000 };
+        break;
+      case 'ICMP':
+        tree.ICMP = { type: block.icmpType ?? 8, code: block.icmpCode ?? 0 };
+        break;
+      case 'Payload':
+        tree.Payload = { mode: block.mode || 'text', data: block.data || '' };
+        break;
+    }
+  }
+  return Object.keys(tree).length ? tree : null;
+}
+
+function refreshDecodeTree(pkt) {
+  const decEl = $('decodeTree');
+  if (!decEl) return;
+  decEl.innerHTML = '';
+  if (!pkt) return;
+  const decoded = decodeFromBlocks(pkt.blocks);
+  if (decoded) buildDecodeTreeDOM(decEl, decoded);
+  else decEl.textContent = 'No decode.';
+}
+
 async function previewFrame() {
   const pkt = getActivePackets()[state.selectedPacketIdx];
   if (!pkt) { toast('Select a packet first', 'warn'); return; }
+  // Decode tree: rebuilt from block model immediately (no API round-trip needed)
+  refreshDecodeTree(pkt);
   try {
     const data = await api('/api/build', { method:'POST', body: JSON.stringify(buildPacketPayload(pkt)) });
     const out = data.stdout || data;
@@ -837,20 +989,6 @@ async function previewFrame() {
 
     const hexEl = $('hexdump');
     if (hexEl) hexEl.innerHTML = renderHexHTML(hex, hiStart, hiEnd);
-
-    const decEl = $('decodeTree');
-    if (decEl) {
-      decEl.innerHTML = '';
-      const raw = out.decoded || data.decoded;
-      const decoded = (raw && typeof raw === 'object') ? raw : decodeHexBasic(hex);
-      if (decoded && typeof decoded === 'object') {
-        buildDecodeTreeDOM(decEl, decoded);
-      } else if (typeof raw === 'string') {
-        decEl.textContent = raw;
-      } else {
-        decEl.textContent = 'No decode.';
-      }
-    }
   } catch (err) { toast(`Build failed: ${err.message}`, 'bad'); }
 }
 
@@ -865,7 +1003,6 @@ async function sendFrame() {
     const out = data.stdout || data;
     toast(`Sent ${out.framesSent || 1} frame(s), ${out.bytesSent || '?'} bytes`, 'ok');
     pkt.status = 'Sent'; renderPacketList();
-    if ($('startTime')) $('startTime').textContent = new Date().toLocaleTimeString();
   } catch (err) { toast(`Send failed: ${err.message}`, 'bad'); }
 }
 
@@ -875,22 +1012,24 @@ let _pgAbort       = false;
 
 async function sendSelectedPackets() {
   if (_pgSelRunning) { _pgAbort = true; return; }
-  const sel = getActivePackets().filter(p => p.checked);
+  // Sort checked packets by ascending display-index order
+  const sel = _sortedByDisplayIdx(getActivePackets()).filter(p => p.checked);
   if (!sel.length) { toast('Check at least one packet', 'warn'); return; }
   const periodMs = parseInt($('pgPeriod')?.value) || 0;
   const repeat   = $('pgRepeat')?.checked || false;
-
+  // periodMs = total cycle time; spread evenly across all selected packets
   _pgSelRunning = true; _pgAbort = false;
   const selBtn = $('pgSendSelected');
   if (selBtn) { selBtn.textContent = '■ Stop'; selBtn.style.cssText = 'background:var(--red);border-color:var(--red);color:#fff;'; }
-  const sp = $('pgSelSpinner'), stats = $('pgStats');
-  const t0 = new Date();
-  if (sp) sp.style.display = '';
+  const pgSpinner = $('pgSpinner');
+  if (pgSpinner) pgSpinner.style.display = 'inline-block';
+  const selStats = $('pgStatsText');
+  const t0sel = new Date();
 
   let totalSent = 0, totalAttempts = 0, cycle = 0;
   do {
     cycle++;
-    if (stats) stats.textContent = `시작: ${t0.toLocaleTimeString()} | 종료: — | 주기: ${cycle} | 전송 중…`;
+    if (selStats) selStats.textContent = `시작: ${t0sel.toLocaleTimeString()} | 종료: — | 주기: ${cycle} | 전송 중…`;
     for (let i = 0; i < sel.length; i++) {
       if (_pgAbort) break;
       const pkt = sel[i];
@@ -909,30 +1048,30 @@ async function sendSelectedPackets() {
 
   _pgSelRunning = false; _pgAbort = false;
   if (selBtn) { selBtn.textContent = '▶ Send Selected'; selBtn.style.cssText = ''; }
-  if (sp) sp.style.display = 'none';
-  const t1 = new Date();
-  if (stats) stats.textContent = `시작: ${t0.toLocaleTimeString()} | 종료: ${t1.toLocaleTimeString()} | 주기: ${cycle} | 전송: ${totalSent}/${totalAttempts}개`;
+  if (pgSpinner) pgSpinner.style.display = 'none';
+  if (selStats) selStats.textContent = `시작: ${t0sel.toLocaleTimeString()} | 종료: ${new Date().toLocaleTimeString()} | 주기: ${cycle} | 전송: ${totalSent}/${totalAttempts}개`;
   toast(`Send Selected: ${totalSent}/${totalAttempts} 완료`, totalSent === totalAttempts ? 'ok' : 'warn');
 }
 
 async function sendPacketList() {
   if (_pgListRunning) { _pgAbort = true; return; }
-  const activePkts = getActivePackets();
+  // Always send in ascending display-index order
+  const activePkts = _sortedByDisplayIdx(getActivePackets());
   if (!activePkts.length) { toast('No packets in list', 'warn'); return; }
   const periodMs = parseInt($('pgPeriod')?.value) || 0;
   const repeat   = $('pgRepeat')?.checked || false;
-
   _pgListRunning = true; _pgAbort = false;
   const listBtn = $('pgSendList');
   if (listBtn) { listBtn.textContent = '■ Stop'; listBtn.style.cssText = 'background:var(--red);border-color:var(--red);color:#fff;'; }
-  const sp = $('pgListSpinner'), stats = $('pgStats');
-  const t0 = new Date();
-  if (sp) sp.style.display = '';
+  const pgSpinnerL = $('pgSpinner');
+  if (pgSpinnerL) pgSpinnerL.style.display = 'inline-block';
+  const listStats = $('pgStatsText');
+  const t0list = new Date();
 
   let totalSent = 0, totalAttempts = 0, cycle = 0;
   do {
     cycle++;
-    if (stats) stats.textContent = `시작: ${t0.toLocaleTimeString()} | 종료: — | 주기: ${cycle} | 전송 중…`;
+    if (listStats) listStats.textContent = `시작: ${t0list.toLocaleTimeString()} | 종료: — | 주기: ${cycle} | 전송 중…`;
     for (let i = 0; i < activePkts.length; i++) {
       if (_pgAbort) break;
       const pkt = activePkts[i];
@@ -951,16 +1090,55 @@ async function sendPacketList() {
 
   _pgListRunning = false; _pgAbort = false;
   if (listBtn) { listBtn.textContent = '▶▶ Send List'; listBtn.style.cssText = ''; }
-  if (sp) sp.style.display = 'none';
-  const t1 = new Date();
-  if (stats) stats.textContent = `시작: ${t0.toLocaleTimeString()} | 종료: ${t1.toLocaleTimeString()} | 주기: ${cycle} | 전송: ${totalSent}/${totalAttempts}개`;
+  if (pgSpinnerL) pgSpinnerL.style.display = 'none';
+  if (listStats) listStats.textContent = `시작: ${t0list.toLocaleTimeString()} | 종료: ${new Date().toLocaleTimeString()} | 주기: ${cycle} | 전송: ${totalSent}/${totalAttempts}개`;
   toast(`Send List: ${totalSent}/${totalAttempts} 완료`, 'ok');
 }
 
 // ── TC Import (Packet Generator) ─────────────────────────────────────────────
 
-const ETHERTYPE_NAMES = { '0x0806':'ARP', '0x0800':'IPv4', '0x86dd':'IPv6', '0x8100':'VLAN' };
+const ETHERTYPE_NAMES = { '0x0806':'ARP', '0x0800':'IPv4', '0x86dd':'IPv6', '0x8100':'VLAN', '0x88cc':'LLDP', '0x8847':'MPLS', '0x8848':'MPLS-mcast', '0x88e1':'HomePlug', '0x88f7':'PTP', '0x0842':'WakeOnLAN' };
 const ETHERTYPE_FROM_NAME = { 'ARP':'0x0806', 'IPv4':'0x0800', 'IP':'0x0800', 'IPv6':'0x86DD', 'VLAN':'0x8100' };
+
+const IP_PROTO_NAMES = {
+  '1':'ICMP','2':'IGMP','4':'IPv4-encap','6':'TCP','8':'EGP','9':'IGP',
+  '17':'UDP','41':'IPv6','47':'GRE','50':'ESP','51':'AH','58':'ICMPv6',
+  '89':'OSPF','132':'SCTP',
+  'tcp':'TCP','udp':'UDP','icmp':'ICMP','icmpv6':'ICMPv6','gre':'GRE',
+  'esp':'ESP','ospf':'OSPF','sctp':'SCTP',
+};
+
+const ICMP_TYPE_NAMES = {
+  '0':'Echo Reply','3':'Dest Unreachable','4':'Source Quench','5':'Redirect',
+  '8':'Echo Request','9':'Router Advertisement','10':'Router Solicitation',
+  '11':'Time Exceeded','12':'Parameter Problem','13':'Timestamp',
+  '14':'Timestamp Reply','15':'Information Request','16':'Information Reply',
+  '17':'Address Mask Request','18':'Address Mask Reply',
+};
+
+const _PROTO_NUM = { tcp:'6', udp:'17', icmp:'1', icmpv6:'58', gre:'47', esp:'50', ospf:'89', sctp:'132' };
+
+function etherTypeHint(v) {
+  const s = (v+'').trim().toLowerCase();
+  const n = s.startsWith('0x') ? parseInt(s,16) : parseInt(s);
+  if (isNaN(n)) return '';
+  const name = ETHERTYPE_NAMES[`0x${n.toString(16).padStart(4,'0')}`];
+  return name ? `${name}: 0x${n.toString(16).padStart(4,'0').toUpperCase()}` : '';
+}
+function ipProtoHint(v) {
+  const s = (v+'').trim().toLowerCase();
+  const num = _PROTO_NUM[s] ?? (isNaN(parseInt(s)) ? null : String(parseInt(s)));
+  if (!num) return '';
+  const name = IP_PROTO_NAMES[s] || IP_PROTO_NAMES[num];
+  return name ? `${name}: ${num}` : '';
+}
+function icmpTypeHint(v) {
+  const n = parseInt(v);
+  const name = ICMP_TYPE_NAMES[String(n)];
+  return name ? `${name}: ${n}` : '';
+}
+
+const FIELD_HINT_FN = { etherType: etherTypeHint, protocol: ipProtoHint, icmpType: icmpTypeHint };
 
 function normEtherType(v) {
   if (!v) return '0x0800';
@@ -1045,11 +1223,11 @@ async function renderTcDropdown() {
     }
     collectPaths(data.tree || []);
 
-    // Collect non-packet (scenario) CSVs with folder label
+    // Collect non-packet (scenario) CSVs with folder label (skip root-level files)
     function collectScenarioFiles(nodes, folderLabel) {
       const items = [];
       for (const n of (nodes || [])) {
-        if (n.type === 'file' && !n.isPacket) {
+        if (n.type === 'file' && !n.isPacket && folderLabel) {
           items.push({ ...n, folderLabel });
         } else if (n.type === 'dir') {
           const sub = folderLabel ? `${folderLabel}/${n.name}` : n.name;
@@ -1186,6 +1364,7 @@ async function selectTcCsv(filePath) {
     state.activeList        = 'tc';
     state.selectedSeqTcIdx  = -1;
     state.selectedSeqRowIdx = -1;
+    state.selectedCsvPath   = filePath;
     const name = filePath.split('/').pop().replace(/\.csv$/i, '');
     const titleEl = $('scDetailTitle');
     if (titleEl) titleEl.textContent = `TEST SEQUENCE — ${name}`;
@@ -1233,15 +1412,18 @@ async function selectTcCsv(filePath) {
     state.seqOriginalItems = tcRows.map(r => ({...r}));
     state.seqItemHeaders   = tcData.headers || [];
     state.seqItems.forEach((r, i) => { if (!r['Index']) r['Index'] = String(i + 1); });
+    const name = filePath.split('/').pop().replace(/\.csv$/i, '');
+    const titleEl = $('scDetailTitle');
+    if (titleEl) titleEl.textContent = `TEST SEQUENCE — ${name}`;
     renderCsvSequence(state.seqItems);   // C# LoadSequence에 해당 — 시퀀스 패널 갱신
     state.tcActivePath     = filePath;
     state.activeList       = 'tc';
     state.selectedSeqTcIdx = -1;
+    state.selectedCsvPath  = filePath;
     _syncTcPacketsToSeq();
     updateTcUI();
     selectPacket(-1);
     updateEstimatedTime();
-    const name = filePath.split('/').pop().replace(/\.csv$/i, '');
     toast(`TC: ${name} — ${tcPackets.length}개 패킷 로드`, 'ok');
   } catch (err) { toast(`TC load failed: ${err.message}`, 'bad'); }
 }
@@ -1304,35 +1486,35 @@ async function _activateTcPackets(filePath, tcRows) {
 }
 
 function clearTcMode() {
-  _tcSessionCache.clear();
-
-  // Revert all tcSeqList entries to their original CSV rows
-  for (const tc of state.tcSeqList) {
-    if (tc.originalRows) tc.rows = tc.originalRows.map(r => ({...r}));
-  }
-  // Re-render the currently selected sequence panel
-  if (state.selectedSeqTcIdx >= 0) {
-    const tc = state.tcSeqList[state.selectedSeqTcIdx];
-    if (tc) renderCsvSequence(tc.rows);
-  }
-
-  // Revert seqItems (used when TC was loaded via PG dropdown, not tcSeqList)
-  if (state.seqOriginalItems && state.seqOriginalItems.length) {
-    state.seqItems = state.seqOriginalItems.map(r => ({...r}));
-    state.seqOriginalItems = [];
-    if (state.selectedSeqTcIdx < 0) renderCsvSequence(state.seqItems);
-  }
+  // Save current TC state to session cache BEFORE clearing PG state.
+  // This keeps custom packets alive for the rest of the session.
+  // Session cache is in-memory only — page refresh or server restart
+  // will automatically restore the original disk CSV.
+  _saveTcToSessionCache();
 
   state.tcPackets        = [];
   state.tcActivePath     = '';
   state.tcOriginalRefs   = new Set();
   state.selectedSeqTcIdx = -1;
   state.activeList       = 'pg';
+
+  // Clear scenario lab sequence panel (user can re-click TC to see current state)
+  state.seqItems          = [];
+  state.seqOriginalItems  = [];
+  state.selectedCsvPath   = '';
+  state.selectedSeqRowIdx = -1;
+  const titleEl = $('scDetailTitle');
+  if (titleEl) titleEl.textContent = 'TEST SEQUENCE — (select a TC)';
+  const seqTbody = $('sequenceRows');
+  if (seqTbody) seqTbody.innerHTML = '';
+  document.querySelectorAll('#csvTree .csv-leaf, #csvTree .csv-root-item')
+    .forEach(e => e.classList.remove('selected'));
+
   closeTcDropdown();
   updateTcUI();
   selectPacket(-1);
   updateEstimatedTime();
-  toast('TC 종료 — Packet Generator 리스트 복귀', 'ok');
+  toast('TC 종료 — 커스텀 패킷 세션 유지 (새로고침 시 원본 복원)', 'ok');
 }
 
 // ── Capture ───────────────────────────────────────────────────────────────────
@@ -1424,6 +1606,8 @@ async function clearCapture() {
   try {
     await api('/api/capture/clear', { method: 'POST', body: '{}' });
     state.captureRows = [];
+    state.captureIfaceFilter = new Set();
+    updateCaptureIfaceFilters();
     renderCaptureRows();
     if ($('packetDetails')) $('packetDetails').textContent = 'Select a packet.';
     if ($('packetHex'))     $('packetHex').textContent = '';
@@ -1441,6 +1625,7 @@ async function loadCapturePackets() {
   try {
     const data = await api('/api/capture/packets?limit=1000');
     state.captureRows = (data.rows || []).map(formatCaptureRow);
+    updateCaptureIfaceFilters();
     renderCaptureRows();
     updateCaptureProtoSummary();
     const total = data.total || state.captureRows.length;
@@ -1468,6 +1653,34 @@ function updateCaptureProtoSummary() {
   if ($('capCntIcmp')) $('capCntIcmp').textContent = c.ICMP;
 }
 
+function updateCaptureIfaceFilters() {
+  const el = $('capIfaceFilters');
+  if (!el) return;
+  const ifaces = [...new Set(state.captureRows.map(r => r.interfaceName).filter(Boolean))].sort();
+  if (ifaces.length <= 1) { el.innerHTML = ''; return; }
+  // Auto-add newly seen interfaces as checked
+  for (const iface of ifaces) {
+    if (!state.captureIfaceFilter.has('__seen__' + iface)) {
+      state.captureIfaceFilter.add('__seen__' + iface);
+      state.captureIfaceFilter.add(iface);
+    }
+  }
+  el.innerHTML = ifaces.map(iface => {
+    const col = _getIfaceColor(iface);
+    const checked = state.captureIfaceFilter.has(iface) ? 'checked' : '';
+    const borderStyle = col ? `border:1px solid ${col.border};color:${col.border};background:${col.bg};` : '';
+    return `<label class="iface-filter-label" style="${borderStyle}">` +
+      `<input type="checkbox" data-iface="${esc(iface)}" ${checked}> ${esc(iface)}</label>`;
+  }).join('');
+  el.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) state.captureIfaceFilter.add(cb.dataset.iface);
+      else state.captureIfaceFilter.delete(cb.dataset.iface);
+      renderCaptureRows();
+    });
+  });
+}
+
 function rowMatchesFilter(row, filter) {
   if (!filter) return true;
   const text = `${row.no} ${row.time} ${row.interfaceName} ${row.source} ${row.destination} ${row.protocol} ${row.length} ${row.info} ${row.srcMac} ${row.dstMac}`.toLowerCase();
@@ -1479,20 +1692,44 @@ function rowMatchesFilter(row, filter) {
   });
 }
 
+const _IFACE_COLORS = [
+  { border:'#4a9eff', bg:'rgba(74,158,255,.07)'  },
+  { border:'#ff6b6b', bg:'rgba(255,107,107,.07)' },
+  { border:'#6bcb77', bg:'rgba(107,203,119,.07)' },
+  { border:'#ffd93d', bg:'rgba(255,217,61,.07)'  },
+  { border:'#c77dff', bg:'rgba(199,125,255,.07)' },
+  { border:'#4ecdc4', bg:'rgba(78,205,196,.07)'  },
+];
+const _ifaceColorMap = new Map();
+function _getIfaceColor(iface) {
+  if (!iface) return null;
+  if (!_ifaceColorMap.has(iface)) _ifaceColorMap.set(iface, _ifaceColorMap.size % _IFACE_COLORS.length);
+  return _IFACE_COLORS[_ifaceColorMap.get(iface)];
+}
+
 function renderCaptureRows() {
   const tbody = $('captureRows');
   if (!tbody) return;
   const filter = ($('captureFilter')?.value || '').trim().toLowerCase();
-  const rows = state.captureRows.filter(r => rowMatchesFilter(r, filter));
+  const activeIfaces = [...state.captureIfaceFilter].filter(k => !k.startsWith('__seen__'));
+  const rows = state.captureRows.filter(r => {
+    if (activeIfaces.length && r.interfaceName && !state.captureIfaceFilter.has(r.interfaceName)) return false;
+    return rowMatchesFilter(r, filter);
+  });
   if (!rows.length) { tbody.innerHTML = `<tr><td colspan="10" class="empty">No packets captured.</td></tr>`; return; }
-  tbody.innerHTML = rows.map((r, i) => `
-    <tr data-idx="${i}" class="proto-${esc((r.protocol||'').toLowerCase())}">
-      <td>${r.no}</td><td>${esc(r.time)}</td><td>${esc(r.interfaceName)}</td>
+  tbody.innerHTML = rows.map((r, i) => {
+    const col = _getIfaceColor(r.interfaceName);
+    const style = col ? ` style="border-left:3px solid ${col.border};background:${col.bg};"` : '';
+    return `
+    <tr data-idx="${i}" class="proto-${esc((r.protocol||'').toLowerCase())}"${style}>
+      <td>${r.no}</td><td>${esc(r.time)}</td>
+      <td>${col ? `<span class="iface-badge" style="border-color:${col.border};color:${col.border};">${esc(r.interfaceName)}</span>` : esc(r.interfaceName)}</td>
       <td>${esc(r.srcMac)}</td><td>${esc(r.dstMac)}</td>
       <td>${esc(r.source)}</td><td>${esc(r.destination)}</td>
       <td><strong>${esc(r.protocol)}</strong></td>
       <td>${r.length}</td><td>${esc(r.info)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   tbody.querySelectorAll('tr').forEach(tr => {
     tr.addEventListener('click', () => {
       tbody.querySelectorAll('tr').forEach(r => r.classList.remove('selected'));
@@ -1515,8 +1752,8 @@ async function loadTestCases() {
     const data = await api('/api/testcases/status');
     const snapshot = data.snapshot || data.testCases || [];
     const allGroups = Array.isArray(snapshot) ? snapshot : (snapshot.groups || []);
-    // Filter out legacy isPacketDef groups, root-folder groups, and synthetic __sequence__ entry
-    const groups = allGroups.filter(g => !g.isPacketDef && g.name !== '(root)' && g.id !== '__sequence__' && g.name !== '__sequence__');
+    // Filter out legacy isPacketDef groups and root-folder groups
+    const groups = allGroups.filter(g => !g.isPacketDef && g.name !== '(root)');
     const hasRealCases = groups.some(g => (g.cases || []).length > 0);
     if (!hasRealCases) {
       // Auto-import CSV files if no test cases exist yet
@@ -1538,7 +1775,7 @@ async function loadSequence() {
   try {
     const data = await api('/api/sequence/full');
     const items = data.items || [];
-    if ($('scDetailTitle')) $('scDetailTitle').textContent = `Test Sequence (${items.length} events)`;
+    if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence (${items.length} events)`;
     renderSequenceRows(items);
   } catch { renderSequenceRows([]); }
 }
@@ -1998,6 +2235,8 @@ function renderCsvTree(tree) {
   function renderNodes(nodes, depth) {
     let h = '';
     for (const n of (nodes || [])) {
+      // Root-level files (not inside any subfolder) are hidden from TEST CASES panel
+      if (n.type === 'file' && depth === 0) continue;
       const pad = depth > 0 ? `padding-left:${depth * 14}px;` : '';
       if (n.type === 'file') {
         if (n.isPacket) {
@@ -2039,7 +2278,8 @@ function renderCsvTree(tree) {
           state.selectedSeqRowIdx = -1;
 
           if (_tcSessionCache.has(csvPath)) {
-            // Already visited this session — restore without hitting disk
+            // Already visited this session — save current TC first, then restore
+            _saveTcToSessionCache();
             const c = _tcSessionCache.get(csvPath);
             state.seqItems       = c.seqRows;
             state.seqItemHeaders = c.seqHeaders;
@@ -2048,6 +2288,7 @@ function renderCsvTree(tree) {
             state.tcNextFrameRef = c.tcNextFrameRef;
             state.tcActivePath   = csvPath;
             state.activeList     = 'tc';
+            state.selectedCsvPath = csvPath;
             const titleEl = $('scDetailTitle');
             if (titleEl) titleEl.textContent = `TEST SEQUENCE — ${name}`;
             renderTcSeqList();
@@ -2058,15 +2299,12 @@ function renderCsvTree(tree) {
             updateEstimatedTime();
             toast(`TC: ${name} — ${state.tcPackets.length}개 패킷 (세션)`, 'ok');
           } else {
-            // First visit — save current TC to cache, then load from disk
+            // First visit — save current TC state to cache BEFORE changing seqItems,
+            // then let selectTcCsv load and render everything (avoids cache corruption).
             _saveTcToSessionCache();
-            const data = await api(`/api/testcases/csv-content?path=${encodeURIComponent(csvPath)}`);
             const titleEl = $('scDetailTitle');
             if (titleEl) titleEl.textContent = `TEST SEQUENCE — ${name}`;
-            state.seqItemHeaders = data.headers || [];
-            state.seqItems       = data.rows   || [];
             renderTcSeqList();
-            renderCsvSequence(data.rows || []);
             await selectTcCsv(csvPath);
           }
         } catch (err) { toast(`CSV load: ${err.message}`, 'bad'); }
@@ -2102,13 +2340,21 @@ async function tcAddToSeq() {
   for (const path of paths) {
     if (state.tcSeqList.find(tc => tc.path === path)) { dup++; continue; }
     try {
+      // If this TC is currently active and has unsaved modifications, persist them first
+      if (state.activeList === 'tc' && state.tcActivePath === path) {
+        _saveTcToSessionCache();
+      }
       const data = await api(`/api/testcases/csv-content?path=${encodeURIComponent(path)}`);
       const name = path.split('/').pop().replace(/\.csv$/i, '');
-      const freshRows = (data.rows || []).map(r => ({...r}));
+      const diskRows = (data.rows || []).map(r => ({...r}));
+      // Prefer session-cached rows (may include user modifications like added packets)
+      const rows = _tcSessionCache.has(path)
+        ? [..._tcSessionCache.get(path).seqRows]
+        : diskRows;
       state.tcSeqList.push({
         path, name, status: 'pending',
-        rows: freshRows,
-        originalRows: freshRows.map(r => ({...r})),
+        rows,
+        originalRows: diskRows,   // always disk-original for revert on X TC
         headers: data.headers || [],
         mtime: mtimes.get(path),
       });
@@ -2391,13 +2637,47 @@ function initPaletteDnD() {
 }
 
 // ── CSV Save (session-only, no disk write) ───────────────────────────────────
-function saveCsvTc() {
-  const tc   = state.tcSeqList[state.selectedSeqTcIdx];
-  const path = tc?.path ?? state.selectedCsvPath;
-  if (!path) { toast('저장할 CSV 경로가 없습니다', 'warn'); return; }
+function _rowsToCsv(headers, rows) {
+  const csvEsc = v => {
+    const s = String(v ?? '');
+    return (s.includes(',') || s.includes('"') || s.includes('\n'))
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.map(csvEsc).join(',')];
+  for (const row of rows) {
+    lines.push(headers.map(h => csvEsc(row[h] ?? '')).join(','));
+  }
+  return lines.join('\r\n');
+}
+
+async function saveCsvTc() {
+  const tc      = state.tcSeqList[state.selectedSeqTcIdx];
+  const csvPath = tc?.path ?? state.selectedCsvPath;
+  if (!csvPath) { toast('저장할 CSV 경로가 없습니다', 'warn'); return; }
+
   _saveTcToSessionCache();
-  const name = path.split('/').pop().replace(/\.csv$/i, '');
-  toast(`[${name}] 세션에 반영됨 (서버 재시작 시 초기화)`, 'ok');
+
+  const rows = [..._getSeqRows()];
+  rows.forEach((r, i) => { r['Index'] = String(i + 1); });
+
+  // Build headers: use saved headers, then append any new fields found in rows
+  let headers = (tc?.headers ?? state.seqItemHeaders ?? []).filter(h => !h.startsWith('_'));
+  if (!headers.length) headers = ['Index', 'Name', 'EventType', 'MAC', 'FrameRef', 'Timeout'];
+  const knownKeys = new Set(headers);
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (!k.startsWith('_') && !knownKeys.has(k)) { headers.push(k); knownKeys.add(k); }
+    }
+  }
+
+  const csvText = _rowsToCsv(headers, rows);
+  try {
+    await api('/api/testcases/save-csv', { method: 'POST', body: JSON.stringify({ path: csvPath, csvText }) });
+    const name = csvPath.split('/').pop().replace(/\.csv$/i, '');
+    toast(`[${name}] CSV 파일 저장 완료`, 'ok');
+  } catch (err) {
+    toast(`저장 실패: ${err.message}`, 'bad');
+  }
 }
 
 function startCsvPoller() {
@@ -2505,6 +2785,10 @@ async function selectSeqTc(idx) {
   const titleEl = $('scDetailTitle');
   if (titleEl) titleEl.textContent = tc ? `TEST SEQUENCE — ${tc.name}` : 'TEST SEQUENCE — (select a TC)';
   if (tc) {
+    // Sync tc.rows from session cache so user-modified state (packets added, rows edited) is shown
+    if (_tcSessionCache.has(tc.path)) {
+      tc.rows = [..._tcSessionCache.get(tc.path).seqRows];
+    }
     renderCsvSequence(tc.rows || []);
     // Also load this TC's packets into PG view (TC mode)
     await _activateTcPackets(tc.path, tc.rows);
@@ -2829,7 +3113,6 @@ function closeEventModal()     {}
 function addTcFromCurrent()    {}
 async function readRegister()  {}
 async function writeRegister() {}
-async function fdbCall()       {}
 
 async function refreshRegStatus() {
   try {
@@ -3504,39 +3787,142 @@ async function sendSerial() {
   catch(err){toast(`Send failed: ${err.message}`,'bad');}
 }
 
-// ── Logs ──────────────────────────────────────────────────────────────────────
-async function loadLogs() {
-  const box=$('logsBox');if(!box)return;
-  try{
-    const [ar,sr]=await Promise.allSettled([api('/api/auto/results'),api('/api/auto/status')]);
-    const rows=(ar.status==='fulfilled'?ar.value.rows:null)||[];
-    const st=sr.status==='fulfilled'?sr.value:{};
-    const lines=[];
-    if(st.running)lines.push(`▶ Running: ${st.test||''}  ${st.statusText||''}`);
-    else if(st.result)lines.push(`■ Last run: ${st.test||'?'}  ${st.result}  (${st.startedAt?new Date(st.startedAt).toLocaleString():''})`);
-    rows.forEach(r=>lines.push(`  [${r.result}] Step ${r.step}  ${r.name}${r.detail?'  '+r.detail:''}`));
-    box.textContent=lines.length?lines.join('\n'):'(no test runs yet — run a test from Scenario Lab or HyperTerminal → Auto)';
-  }catch(err){box.textContent=`Log load failed: ${err.message}`;}
-}
-
 // ── Settings ──────────────────────────────────────────────────────────────────
 async function refreshSettings() {
   try {
     const [hr, rr] = await Promise.allSettled([api('/api/health'), api('/api/register/status')]);
     const h = hr.status==='fulfilled' ? hr.value : {};
     const capOk = h.packets?.cap, tdOk = h.packets?.tcpdump;
-    const packetSt = capOk ? '● cap npm  (send+capture)' : tdOk ? '● tcpdump  (capture only)' : '○ none  (install Npcap + npm install cap)';
+    const packetSt = capOk ? '● cap npm  (send+capture)' : tdOk ? '● tcpdump  (capture only)' : '○ none  (install Npcap)';
     const serialOk = h.serial?.available;
     const platform = h.platform==='win32' ? 'Windows (Npcap)' : h.platform==='linux' ? 'Linux (libpcap)' : h.platform||'—';
-    if($('settingsPlatform'))$('settingsPlatform').textContent=platform;
-    if($('settingsPackets'))$('settingsPackets').textContent=packetSt;
-    if($('settingsSerial'))$('settingsSerial').textContent=serialOk?`● available${h.serial?.open?' (open)':''}` :'○ not available';
-    if($('settingsVersion'))$('settingsVersion').textContent=h.server?.version||'—';
+    if($('settingsPlatform'))$('settingsPlatform').textContent = platform;
+    if($('settingsPackets'))$('settingsPackets').textContent  = packetSt;
+    if($('settingsSerial'))$('settingsSerial').textContent    = serialOk ? `● available${h.serial?.open?' (open)':''}` : '○ not available';
+    if($('settingsVersion'))$('settingsVersion').textContent  = h.server?.version || '—';
     const r = rr.status==='fulfilled' ? rr.value : {};
-    const workerSt = `${r.serialConnected?'● serial connected':'○ serial disconnected'}  base: ${r.baseAddress||'—'}`;
-    if($('settingsWorkerState'))$('settingsWorkerState').textContent=workerSt;
-    if($('settingsBaseAddr')&&r.baseAddress)$('settingsBaseAddr').value=r.baseAddress;
-  } catch {}
+    if($('settingsWorkerState'))$('settingsWorkerState').textContent = `${r.serialConnected?'● serial':'○ serial'}  base: ${r.baseAddress||'—'}`;
+    if($('settingsBaseAddr') && r.baseAddress) $('settingsBaseAddr').value = r.baseAddress;
+    const dot = $('serverState'); if(dot) dot.classList.toggle('connected', !!h.ok);
+    if($('status')) $('status').textContent = h.ok ? 'Connected' : 'Offline';
+  } catch { if($('status'))$('status').textContent='Offline'; }
+}
+
+// ── Port Map ──────────────────────────────────────────────────────────────────
+let _portmap = [];
+
+async function loadPortmap() {
+  try {
+    const data = await api('/api/portmap');
+    _portmap = data.ports || [];
+    renderPortmapTable();
+  } catch { /* offline */ }
+}
+
+function renderPortmapTable() {
+  const tbody = $('portmapRows'); if (!tbody) return;
+  if (!_portmap.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No ports defined.</td></tr>'; return; }
+  tbody.innerHTML = _portmap.map((p, i) => {
+    const nicOpts = state.interfaces.map(ni => `<option value="${esc(ni.name)}"${ni.name===p.nic?' selected':''}>${esc(ni.name)}</option>`).join('');
+    return `<tr>
+      <td style="text-align:center;">${p.portId}</td>
+      <td><select class="pm-nic" data-idx="${i}" style="width:100%;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:2px 4px;font-size:11px;">
+        <option value="">-- NIC --</option>${nicOpts}
+      </select></td>
+      <td><input class="pm-desc" data-idx="${i}" value="${esc(p.description||'')}" placeholder="e.g. SW Port ${p.portId} → ETH" style="width:100%;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:2px 5px;font-size:11px;"></td>
+      <td style="text-align:center;"><button class="small danger pm-del" data-idx="${i}" title="Remove">✕</button></td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('.pm-nic').forEach(sel => sel.addEventListener('change', e => { _portmap[Number(e.target.dataset.idx)].nic = e.target.value; }));
+  tbody.querySelectorAll('.pm-desc').forEach(inp => inp.addEventListener('input', e => { _portmap[Number(e.target.dataset.idx)].description = e.target.value; }));
+  tbody.querySelectorAll('.pm-del').forEach(btn => btn.addEventListener('click', e => { _portmap.splice(Number(e.target.dataset.idx), 1); renderPortmapTable(); }));
+  renderMacroPortSel();
+}
+
+async function savePortmap() {
+  const st = $('portmapSt');
+  try {
+    await api('/api/portmap', { method: 'POST', body: JSON.stringify({ ports: _portmap }) });
+    if (st) { st.textContent = 'Saved ✓'; setTimeout(() => { if (st) st.textContent = ''; }, 2000); }
+  } catch (err) { if (st) st.textContent = `Error: ${err.message}`; }
+}
+
+function renderMacroPortSel() {
+  const wrap = $('macroPortSel'); if (!wrap) return;
+  const mapped = _portmap.filter(p => p.nic);
+  if (!mapped.length) { wrap.innerHTML = '<span style="color:var(--muted);font-size:11px;">No NIC mapped. Define port mapping above first.</span>'; return; }
+  wrap.innerHTML = mapped.map(p => `
+    <label class="check-inline" style="font-size:11px;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;">
+      <input type="checkbox" class="macro-port-chk" data-port="${p.portId}" checked>
+      Port ${p.portId} <span style="color:var(--muted);">${esc(p.nic)}</span>
+    </label>`).join('');
+}
+
+async function runMacro() {
+  const btn = $('macroRun'), spin = $('macroSpinner');
+  const count = parseInt($('macroCount')?.value || '10');
+  const intervalMs = parseInt($('macroInterval')?.value || '10');
+  const selected = [...document.querySelectorAll('.macro-port-chk:checked')].map(c => Number(c.dataset.port));
+  if (!selected.length) { toast('테스트할 포트를 선택하세요', 'bad'); return; }
+
+  const mapped = selected.map(pid => _portmap.find(p => p.portId === pid)).filter(Boolean);
+  if (mapped.length < 2) { toast('최소 2개 포트가 필요합니다 (src + dst)', 'bad'); return; }
+
+  if (btn) btn.disabled = true;
+  if (spin) spin.style.display = '';
+  const tbody = $('macroResultRows');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);">Running…</td></tr>';
+
+  const results = [];
+  const base = `http://localhost:${location.port || 8080}`;
+
+  try {
+    for (let si = 0; si < mapped.length; si++) {
+      const dst = mapped[(si + 1) % mapped.length];
+      const src = mapped[si];
+      try {
+        const r = await api('/api/simple-bidir-forward-test', {
+          method: 'POST',
+          body: JSON.stringify({
+            nodeAUrl: base, nodeBUrl: base,
+            nodeAPrimaryInterface: src.nic,
+            nodeBPrimaryInterface: dst.nic,
+            count, intervalMs, direction: 'A_TO_B'
+          })
+        });
+        const d = r.directions?.[0] || {};
+        results.push({ srcPort: src.portId, srcNic: src.nic, dstPort: dst.portId, dstNic: dst.nic,
+                        sent: d.sent || count, matched: d.matched || 0, result: d.result || 'FAIL' });
+      } catch (e) {
+        results.push({ srcPort: src.portId, srcNic: src.nic, dstPort: dst.portId, dstNic: dst.nic,
+                        sent: count, matched: 0, result: 'ERROR', error: e.message });
+      }
+    }
+    if (tbody) {
+      tbody.innerHTML = results.map(r => `<tr>
+        <td style="text-align:center;">${r.srcPort}</td>
+        <td style="font-size:10px;">${esc(r.srcNic)}</td>
+        <td style="text-align:center;">${r.dstPort}</td>
+        <td style="font-size:10px;">${esc(r.dstNic)}</td>
+        <td style="text-align:center;">${r.sent}</td>
+        <td style="text-align:center;">${r.matched}</td>
+        <td style="text-align:center;font-weight:600;color:${r.result==='PASS'?'#44FF88':'var(--red)'};">${r.result}</td>
+      </tr>`).join('');
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+    if (spin) spin.style.display = 'none';
+  }
+}
+
+// ── Logs ──────────────────────────────────────────────────────────────────────
+async function loadLogs() {
+  try{
+    const data=await api('/api/logs');const box=$('logsBox');if(!box)return;
+    const fmtEntry=(e,kind)=>{if(e.error)return `[${kind}] parse error: ${e.file}\n`;const ts=e.startedAt||e.timestamp||e.createdAt||'',name=e.name||e.testName||e.macroName||e.id||'?',result=e.result||e.status||(e.passed!=null?(e.passed?'PASS':'FAIL'):'');return `${ts?new Date(ts).toLocaleString()+'  '  :''}[${kind}] ${name}  ${result}\n`;};
+    const tests=(data.tests||[]).map(e=>fmtEntry(e,'TEST')),macros=(data.macros||[]).map(e=>fmtEntry(e,'MACRO'));
+    const all=[...tests,...macros];box.textContent=all.length?all.join(''):  '(no logs yet)';
+  }catch(err){if($('logsBox'))$('logsBox').textContent=`Log load failed: ${err.message}`;}
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -3550,7 +3936,13 @@ function updateStatusBar() {
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function initWebSocket() {
   const ws=new WebSocket(`ws://${location.host}`);
-  ws.onmessage=({data})=>{try{const msg=JSON.parse(data);if(msg.type==='workerEvent'){const p=msg.payload||{};if(p.kind==='serial'&&p.rxType==='rx'&&p.hex){const bytes=Uint8Array.from(p.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));}else if(p.type==='serialData'||p.type==='terminal'){appendSeqTerm(p.text||p.data||'');}}}catch{/*ignore*/}};
+  ws.onmessage=({data})=>{try{const msg=JSON.parse(data);if(msg.type==='workerEvent'){const p=msg.payload||{};
+    if(p.kind==='serial'&&p.rxType==='rx'&&p.hex){
+      const bytes=Uint8Array.from(p.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));
+      const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);
+      text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));
+    }else if(p.type==='serialData'||p.type==='terminal'){appendHyperTerm(p.text||p.data||'');}
+  }}catch{/*ignore*/}};
   ws.onclose=()=>setTimeout(initWebSocket,3000);
 }
 
@@ -3562,7 +3954,6 @@ async function init() {
   initTocNav();
   initRegViewer();
 
-  if($('startTime'))$('startTime').textContent=new Date().toLocaleTimeString();
 
   // Packet Generator
   $('refreshAll')?.addEventListener('click', refreshInterfaces);
@@ -3642,12 +4033,22 @@ async function init() {
 
   // Settings
   $('refreshLogs')?.addEventListener('click', loadLogs);
-  $('settingsWorkerRefresh')?.addEventListener('click', refreshSettings);
-  $('settingsBaseAddrApply')?.addEventListener('click', async ()=>{
-    const val=$('settingsBaseAddr')?.value?.trim();if(!val)return;
-    try{await api('/api/register/base-addr',{method:'POST',body:JSON.stringify({address:val})});if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='Applied ✓';setTimeout(()=>{if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='';},2000);await refreshRegStatus();}
-    catch(err){if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent=`Error: ${err.message}`;}
+  $('settingsRefresh')?.addEventListener('click', refreshSettings);
+  $('settingsBaseAddrApply')?.addEventListener('click', async () => {
+    const val = $('settingsBaseAddr')?.value?.trim(); if (!val) return;
+    try {
+      await api('/api/register/base-addr', { method: 'POST', body: JSON.stringify({ address: val }) });
+      if ($('settingsBaseAddrSt')) { $('settingsBaseAddrSt').textContent = 'Applied ✓'; setTimeout(() => { if ($('settingsBaseAddrSt')) $('settingsBaseAddrSt').textContent = ''; }, 2000); }
+      await refreshRegStatus();
+    } catch (err) { if ($('settingsBaseAddrSt')) $('settingsBaseAddrSt').textContent = `Error: ${err.message}`; }
   });
+  $('portmapSave')?.addEventListener('click', savePortmap);
+  $('portmapAddRow')?.addEventListener('click', () => {
+    const nextId = _portmap.length ? Math.max(..._portmap.map(p => p.portId)) + 1 : 0;
+    _portmap.push({ portId: nextId, nic: '', description: '' });
+    renderPortmapTable();
+  });
+  $('macroRun')?.addEventListener('click', runMacro);
 
   try {
     await api('/api/health');
@@ -3659,6 +4060,7 @@ async function init() {
       refreshRegStatus(),
       loadTestCases(),
       loadSequence(),
+      loadPortmap(),
     ]);
     startCapturePolling();
     // Serial polling every 1500ms when on HyperTerminal tab
@@ -3666,6 +4068,8 @@ async function init() {
       const activeView = document.querySelector('.view.active');
       if (activeView?.id === 'hyperTermView') refreshSerialStatus();
     }, 1500);
+    // Interface auto-refresh every 1s (silent — only updates selects when list changes)
+    setInterval(() => _silentRefreshInterfaces(), 1000);
   } catch (err) {
     setStatus(`Offline — ${err.message}`, false);
     toast(`Server not reachable: ${err.message}`, 'bad');
@@ -3736,7 +4140,29 @@ function initApp() {
   $('tcAddToSeq')?.addEventListener('click', tcAddToSeq);
   $('scRowAdd')?.addEventListener('click',  addPacket);
   $('scRowDel')?.addEventListener('click',  deletePacket);
-  $('scRowDup')?.addEventListener('click',  duplicatePacket);
+  $('scRowDup')?.addEventListener('click', () => {
+    if (state.activeList === 'tc') {
+      // In TC mode: if selected row is a Packet type, duplicate both packet and seq row
+      const rows = _getSeqRows();
+      if (state.selectedSeqRowIdx >= 0 && state.selectedSeqRowIdx < rows.length) {
+        const row = rows[state.selectedSeqRowIdx];
+        const evType = (row['EventType'] || row['Event Type'] || '').toLowerCase();
+        if (evType === 'packet') {
+          const frameRef = (row['FrameRef'] || '').trim();
+          const pktIdx = state.tcPackets.findIndex(p => p.name === frameRef);
+          if (pktIdx >= 0) {
+            state.selectedPacketIdx = pktIdx;
+            duplicatePacket();
+            return;
+          }
+        }
+      }
+      // Non-packet row or packet not found: just duplicate the sequence row
+      scRowDup();
+    } else {
+      scRowDup();
+    }
+  });
   $('scRowUp')?.addEventListener('click',   () => movePacket(-1));
   $('scRowDown')?.addEventListener('click', () => movePacket(1));
   $('scSaveCsv')?.addEventListener('click', saveCsvTc);

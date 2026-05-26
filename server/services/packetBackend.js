@@ -63,6 +63,42 @@ function resolveDevice(ifaceName) {
 
 const activeCaptures = new Map(); // iface → { cap, buffer }
 
+// ── Interface health monitor ───────────────────────────────────────────────────
+// cap's libuv uv_poll_t asserts when a captured interface's fd becomes invalid
+// (interface removed / goes down). Proactively close Cap handles the moment we
+// detect the interface is gone so libuv can cleanly stop the poll handle first.
+let _ifaceMonitorTimer = null;
+
+function _liveIfaceNames() {
+  try { return new Set(Object.keys(os.networkInterfaces() || {})); } catch { return new Set(); }
+}
+
+function _startIfaceMonitor() {
+  if (_ifaceMonitorTimer) return;
+  _ifaceMonitorTimer = setInterval(() => {
+    if (activeCaptures.size === 0 && _sendHandles.size === 0) return;
+    const live = _liveIfaceNames();
+    for (const [dev] of [...activeCaptures]) {
+      if (!live.has(dev)) {
+        console.warn(`[packetBackend] interface ${dev} removed — closing capture handle`);
+        const entry = activeCaptures.get(dev);
+        try { entry?.cap.close(); } catch {}
+        activeCaptures.delete(dev);
+      }
+    }
+    for (const [dev] of [..._sendHandles]) {
+      if (!live.has(dev)) _dropSendHandle(dev);
+    }
+  }, 500);
+}
+
+// Gracefully close all Cap handles on process exit so libuv poll stops cleanly
+function _closeAllCapHandles() {
+  for (const [, entry] of activeCaptures) { try { entry.cap.close(); } catch {} }
+  activeCaptures.clear();
+  for (const [dev] of [..._sendHandles]) { try { _dropSendHandle(dev); } catch {} }
+}
+
 // ── tcpdump fallback capture (no cap, no Python needed) ───────────────────────
 
 const activeTcpdump = new Map(); // iface → child_process
@@ -116,8 +152,7 @@ function startCaptureTcpdump(ifaceNames, filter, onPacket, onError) {
         const ts      = tsSec + tsUsec / 1e6;
         const decoded = decodeFrame(frame);
         const record  = { no, timestamp: ts, interface: iface, length: origLen, frameHex: frame.toString('hex'), decoded };
-        if (captureRows.length >= MAX_CAPTURE_ROWS) captureRows.shift();
-        captureRows.push(record);
+        insertCaptureSorted(record);
         try { onPacket(iface, frame, record); } catch {}
         for (const cb of captureStreamCbs) { try { cb(record); } catch {} }
       }
@@ -179,22 +214,16 @@ function startCapture(ifaceNames, filter, onPacket, onError) {
         c.setMinBytes && c.setMinBytes(0);
 
         c.on('packet', (nbytes) => {
-          const now = Date.now();
-          if (now - _lastCapture < CAPTURE_RATE_MS) return;
-          _lastCapture = now;
-          setImmediate(() => {
-            try {
-              const frame = Buffer.from(buf.slice(0, nbytes));
-              const no      = ++captureSeq;
-              const decoded = decodeFrame(frame);
-              const ifName  = dev;
-              const record  = { no, timestamp: now / 1000, interface: ifName, length: nbytes, frameHex: frame.toString('hex'), decoded };
-              if (captureRows.length >= MAX_CAPTURE_ROWS) captureRows.shift();
-              captureRows.push(record);
-              onPacket(ifName, frame, record);
-              for (const cb of captureStreamCbs) { try { cb(record); } catch {} }
-            } catch {}
-          });
+          try {
+            const frame = Buffer.from(buf.slice(0, nbytes));
+            const no      = ++captureSeq;
+            const ts      = Date.now() / 1000;
+            const decoded = decodeFrame(frame);
+            const record  = { no, timestamp: ts, interface: dev, length: nbytes, frameHex: frame.toString('hex'), decoded };
+            insertCaptureSorted(record);
+            onPacket(dev, frame, record);
+            for (const cb of captureStreamCbs) { try { cb(record); } catch {} }
+          } catch {}
         });
         c.on('error', (err) => { try { onError && onError(err); } catch {} });
 
@@ -202,6 +231,7 @@ function startCapture(ifaceNames, filter, onPacket, onError) {
         started++;
       } catch (e) { /* device not available */ }
     }
+    if (started > 0) _startIfaceMonitor();
     return started > 0;
   }
 
@@ -223,6 +253,32 @@ function getCaptureDeviceNames() {
   return [...Array.from(activeCaptures.keys()), ...Array.from(activeTcpdump.keys())];
 }
 
+// ── Persistent send handles ────────────────────────────────────────────────────
+// Reuse one Cap handle per device across send calls.
+// Rapid new Cap() → open() → close() cycles cause use-after-free in libuv's
+// uv_poll_stop() path inside cap.node, leading to SIGSEGV.
+
+const _sendHandles  = new Map(); // dev → { cap, buf }
+const _sendInFlight = new Set(); // devs currently transmitting
+
+function _getSendHandle(dev) {
+  if (_sendHandles.has(dev)) return _sendHandles.get(dev);
+  const c   = new Cap();
+  const buf = Buffer.alloc(65535);
+  c.open(dev, '', 0, buf);
+  const h = { cap: c, buf };
+  _sendHandles.set(dev, h);
+  _startIfaceMonitor(); // ensure monitor is running whenever we hold a live handle
+  return h;
+}
+
+function _dropSendHandle(dev) {
+  const h = _sendHandles.get(dev);
+  if (!h) return;
+  try { h.cap.close(); } catch {}
+  _sendHandles.delete(dev);
+}
+
 // ── Send ───────────────────────────────────────────────────────────────────────
 
 async function sendPackets(profile) {
@@ -231,12 +287,15 @@ async function sendPackets(profile) {
   const dev = resolveDevice(profile.interface);
   if (!dev) throw new Error(`Interface not found: ${profile.interface}`);
 
+  if (_sendInFlight.has(dev))
+    throw new Error(`Send already in progress on interface ${dev}`);
+
   const count      = profile.count      ?? 1;
   const intervalMs = profile.intervalMs ?? 0;
 
-  // Auto-fill srcMac if missing (look up from OS NIC)
+  // Auto-fill srcMac if missing
   if (!profile.srcMac) {
-    const nics = os.networkInterfaces();
+    const nics  = os.networkInterfaces();
     const iface = (profile.interface || '').toLowerCase();
     for (const [name, entries] of Object.entries(nics || {})) {
       if (name.toLowerCase() === iface) {
@@ -249,27 +308,29 @@ async function sendPackets(profile) {
     }
   }
 
-  const c   = new Cap();
-  const buf = Buffer.alloc(65535);
+  _sendInFlight.add(dev);
   try {
-    c.open(dev, '', 0, buf);
-    let sent  = 0;
-    let bytes = 0;
+    const handle = _getSendHandle(dev);
+    let sent = 0, bytes = 0;
     for (let i = 0; i < count; i++) {
       const frame = buildFrame(profile, i);
-      c.send(frame, frame.length);
+      if (frame.length > 65535) throw new Error(`Frame too large: ${frame.length} bytes`);
+      handle.cap.send(frame, frame.length);
       sent++;
       bytes += frame.length;
       if (intervalMs > 0 && i < count - 1)
         await new Promise(r => setTimeout(r, intervalMs));
     }
     return { framesSent: sent, bytesSent: bytes };
+  } catch (err) {
+    _dropSendHandle(dev); // discard broken handle; next call will recreate
+    throw err;
   } finally {
-    try { c.close(); } catch {}
+    _sendInFlight.delete(dev);
   }
 }
 
-function isAvailable()       { return !!Cap; }
+function isAvailable()        { return !!Cap; }
 function isTcpdumpAvailable() { return hasTcpdump(); }
 
 // Send a raw hex frame (used by nativeWorker sendhex command)
@@ -277,15 +338,26 @@ async function sendRaw(ifaceName, hex, count = 1) {
   if (!Cap) throw new Error('cap npm not installed — packet send requires: sudo apt install libpcap-dev build-essential && npm install cap');
   const dev = resolveDevice(ifaceName);
   if (!dev) throw new Error(`Interface not found: ${ifaceName}`);
+
+  if (_sendInFlight.has(dev))
+    throw new Error(`Send already in progress on interface ${dev}`);
+
   const frame = Buffer.from((hex || '').replace(/[\s:]/g, ''), 'hex');
-  const c   = new Cap();
-  const buf = Buffer.alloc(65535);
-  c.open(dev, '', 0, buf);
-  let sent = 0;
+  if (frame.length === 0) throw new Error('Empty frame');
+  if (frame.length > 65535) throw new Error(`Frame too large: ${frame.length} bytes`);
+
+  _sendInFlight.add(dev);
   try {
-    for (let i = 0; i < count; i++) { c.send(frame, frame.length); sent++; }
-  } finally { try { c.close(); } catch {} }
-  return { framesSent: sent, bytesSent: sent * frame.length };
+    const handle = _getSendHandle(dev);
+    let sent = 0;
+    for (let i = 0; i < count; i++) { handle.cap.send(frame, frame.length); sent++; }
+    return { framesSent: sent, bytesSent: sent * frame.length };
+  } catch (err) {
+    _dropSendHandle(dev);
+    throw err;
+  } finally {
+    _sendInFlight.delete(dev);
+  }
 }
 
 // ── Frame decoder ──────────────────────────────────────────────────────────────
@@ -346,14 +418,29 @@ function decodeFrame(buf) {
 
 // ── Capture buffer ─────────────────────────────────────────────────────────────
 
-const MAX_CAPTURE_ROWS = 5000;
-const CAPTURE_RATE_MS  = 10;   // drop packets faster than 100 pps per interface
 let captureSeq  = 0;
 let captureRows = [];
 let captureStreamCbs = [];
-let _lastCapture = 0;
 
 function clearCapture() { captureSeq = 0; captureRows = []; }
+
+// Insert record in timestamp order (handles out-of-order delivery from concurrent tcpdump processes)
+function insertCaptureSorted(record) {
+  const ts = record.timestamp;
+  // Fast path: most packets arrive in order
+  if (!captureRows.length || ts >= captureRows[captureRows.length - 1].timestamp) {
+    captureRows.push(record);
+    return;
+  }
+  // Binary search for insertion point
+  let lo = 0, hi = captureRows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (captureRows[mid].timestamp <= ts) lo = mid + 1;
+    else hi = mid;
+  }
+  captureRows.splice(lo, 0, record);
+}
 
 function getCaptures(limit = 1000, offset = 0) {
   const slice = captureRows.slice(offset, offset + limit);
@@ -395,6 +482,15 @@ function prefixFromMask(mask) {
 
 function addStreamCallback(cb)    { captureStreamCbs.push(cb); }
 function removeStreamCallback(cb) { captureStreamCbs = captureStreamCbs.filter(x => x !== cb); }
+
+// Close all Cap handles before the process exits so libuv can cleanly unregister
+// poll handles — prevents the 'status == 0' assertion in cap's cb_packets.
+['exit', 'SIGINT', 'SIGTERM'].forEach(sig => {
+  process.on(sig, () => {
+    try { _closeAllCapHandles(); } catch {}
+    if (sig !== 'exit') process.exit(0);
+  });
+});
 
 module.exports = {
   sendPackets, sendRaw, startCapture, stopCapture, isCapturing,

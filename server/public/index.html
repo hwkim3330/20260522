@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ethernet Packet Generator</title>
   <link rel="icon" type="image/png" href="/keti.png">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=20260526i">
 </head>
 <body>
 <div id="toastTray" class="toast-tray" aria-live="polite"></div>
@@ -89,14 +89,11 @@
               <button id="pgDupPacket" class="small">⧉</button>
               <div class="spacer"></div>
               <button id="pgSendSelected" class="small">▶ Send Selected</button>
-              <span id="pgSelSpinner" class="spinner" style="display:none;"></span>
               <button id="pgSendList" class="small primary">▶▶ Send List</button>
-              <span id="pgListSpinner" class="spinner" style="display:none;"></span>
+              <span id="pgSpinner" class="spinner" style="display:none;"></span>
               <label class="check-inline"><input id="pgRepeat" type="checkbox"> Repeat</label>
               <span class="muted-label">주기(ms):</span>
-              <input id="pgPeriod" type="number" min="0" value="0" style="width:55px;" title="주기 (ms)">
-              <span class="muted-label">예상(ms):</span>
-              <span id="pgEstMs" class="muted-label" style="min-width:50px;">—</span>
+              <input id="pgPeriod" type="number" min="0" value="0" style="width:65px;" title="패킷 간 전송 간격 (ms)">
             </div>
           </div>
           <div class="table-area">
@@ -119,7 +116,7 @@
               </tbody>
             </table>
           </div>
-          <div class="pkt-stats" id="pgStats">Start: — | End: — | Cycle: — | Est: — ms | Sent: 0 pkts / 0 bytes</div>
+          <div class="pkt-stats" id="pgStats"><span id="pgStatsText">시작: — | 종료: — | 주기: — | 전송: 0 pkts</span></div>
         </div>
       </div>
       <!-- Col2: ProtocolPaletteView (180px) -->
@@ -206,8 +203,6 @@
               <button id="scRowDup"  class="small" title="패킷 복제">⧉</button>
               <button id="scRowUp"   class="small" title="위로 이동">↑</button>
               <button id="scRowDown" class="small" title="아래로 이동">↓</button>
-              <span class="toolbar-sep"></span>
-              <select id="scInterface" style="width:130px;font-size:11px;padding:2px 4px;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;" title="Interface for sequence run"><option value="">-- Interface --</option></select>
               <span class="toolbar-sep"></span>
               <label class="check-inline"><input id="scRepeat" type="checkbox"> Repeat</label>
               <label class="check-inline"><input id="scFailIgnore" type="checkbox"> Fail 무시</label>
@@ -322,6 +317,8 @@
           UDP <span id="capCntUdp">0</span> &nbsp;
           ICMP <span id="capCntIcmp">0</span>
         </div>
+        <!-- Interface filter checkboxes (hidden when only 1 interface) -->
+        <div class="iface-filters" id="capIfaceFilters"></div>
         <!-- Packet table -->
         <div class="table-area">
           <table>
@@ -892,50 +889,114 @@
       <div class="settings-wrap">
         <div class="settings-grid">
 
-          <!-- Server Status -->
+          <!-- ── SERVER STATUS ── -->
           <div class="reg-card">
             <div class="reg-card-title">SERVER STATUS</div>
-            <div style="font-size:11px;line-height:2;">
-              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Platform</span><span id="settingsPlatform">—</span></div>
-              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Packets</span><span id="settingsPackets">—</span></div>
-              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Serial</span><span id="settingsSerial">—</span></div>
-              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:68px;">Version</span><span id="settingsVersion">—</span></div>
+            <div style="font-size:11px;line-height:2.1;">
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:72px;">Platform</span><span id="settingsPlatform">—</span></div>
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:72px;">Packets</span><span id="settingsPackets">—</span></div>
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:72px;">Serial</span><span id="settingsSerial">—</span></div>
+              <div style="display:flex;gap:8px;"><span style="color:var(--muted);width:72px;">Version</span><span id="settingsVersion">—</span></div>
             </div>
-            <div class="reg-card row" style="margin-top:10px;align-items:center;">
-              <button id="settingsWorkerRefresh" class="small">⟳ Refresh</button>
-              <span id="settingsWorkerState" style="font-size:10px;color:var(--muted);margin-left:8px;"></span>
+            <div style="margin-top:10px;display:flex;align-items:center;gap:8px;">
+              <button id="settingsRefresh" class="small">⟳ Refresh</button>
+              <span id="settingsWorkerState" style="font-size:10px;color:var(--muted);"></span>
             </div>
           </div>
 
-          <!-- Register Base Address -->
+          <!-- ── REGISTER BASE ADDRESS ── -->
           <div class="reg-card">
             <div class="reg-card-title">REGISTER BASE ADDRESS</div>
             <div class="field">
               <label>Base Address (hex)</label>
               <input id="settingsBaseAddr" class="mono" placeholder="0x44A00000" style="width:160px;">
             </div>
-            <div class="reg-card row" style="margin-top:8px;align-items:center;">
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
               <button id="settingsBaseAddrApply" class="small primary">Apply</button>
-              <span id="settingsBaseAddrSt" style="font-size:10px;color:var(--muted);margin-left:8px;"></span>
+              <span id="settingsBaseAddrSt" style="font-size:10px;color:var(--muted);"></span>
             </div>
           </div>
 
-          <!-- Activity Log -->
+          <!-- ── NIC / PORT MAPPING ── -->
+          <div class="reg-card" style="grid-column:1/-1;">
+            <div class="reg-card-title" style="display:flex;justify-content:space-between;align-items:center;">
+              NIC / PORT MAPPING
+              <div style="display:flex;gap:6px;">
+                <button id="portmapAddRow" class="small">＋ Port</button>
+                <button id="portmapSave" class="small primary">💾 Save</button>
+                <span id="portmapSt" style="font-size:10px;color:var(--muted);align-self:center;margin-left:4px;"></span>
+              </div>
+            </div>
+            <div style="font-size:10px;color:var(--muted);margin-bottom:6px;">
+              스위치 포트 번호와 PC NIC를 매핑합니다. Scenario Lab / Packet Generator에서 포트 번호로 인터페이스를 자동 선택합니다.
+            </div>
+            <div style="overflow-x:auto;">
+              <table class="fdb-table" id="portmapTable">
+                <thead>
+                  <tr>
+                    <th style="width:70px;">Port #</th>
+                    <th style="width:220px;">NIC (Interface)</th>
+                    <th>Description</th>
+                    <th style="width:36px;"></th>
+                  </tr>
+                </thead>
+                <tbody id="portmapRows">
+                  <tr><td colspan="4" style="text-align:center;color:var(--muted);">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ── QUICK PACKET FLOW MACRO ── -->
+          <div class="reg-card" style="grid-column:1/-1;">
+            <div class="reg-card-title" style="display:flex;justify-content:space-between;align-items:center;">
+              QUICK PACKET FLOW MACRO
+              <div style="display:flex;gap:6px;align-items:center;">
+                <label style="font-size:11px;color:var(--muted);">Count:</label>
+                <input id="macroCount" type="number" value="10" min="1" max="1000" style="width:55px;font-size:11px;">
+                <label style="font-size:11px;color:var(--muted);">Interval(ms):</label>
+                <input id="macroInterval" type="number" value="10" min="1" max="10000" style="width:55px;font-size:11px;">
+                <button id="macroRun" class="small primary" style="background:var(--green);border-color:var(--green);color:#000;">▶ Run</button>
+                <span id="macroSpinner" class="spinner" style="display:none;"></span>
+              </div>
+            </div>
+            <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">
+              포트 맵핑을 기반으로 각 포트에 패킷을 전송하고 수신 포트에서 캡처하여 PASS/FAIL을 표시합니다. 테스트할 포트를 선택하세요.
+            </div>
+            <!-- Port selection -->
+            <div id="macroPortSel" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;"></div>
+            <!-- Results table -->
+            <div style="overflow-x:auto;">
+              <table class="fdb-table">
+                <thead>
+                  <tr>
+                    <th>Src Port</th><th>Src NIC</th><th>Dst Port</th><th>Dst NIC</th>
+                    <th>Sent</th><th>Matched</th><th>Result</th>
+                  </tr>
+                </thead>
+                <tbody id="macroResultRows">
+                  <tr><td colspan="7" style="text-align:center;color:var(--muted);">Run macro to see results.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ── ACTIVITY LOG ── -->
           <div class="reg-card" style="grid-column:1/-1;">
             <div class="reg-card-title" style="display:flex;justify-content:space-between;align-items:center;">
               ACTIVITY LOG
               <button id="refreshLogs" class="small">⟳ Refresh</button>
             </div>
-            <pre id="logsBox" style="margin:4px 0 0;padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:3px;font-size:10px;height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;">(no logs yet)</pre>
+            <pre id="logsBox" style="margin:4px 0 0;padding:6px;background:var(--bg);border:1px solid var(--border);border-radius:3px;font-size:10px;height:180px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;">(no logs yet)</pre>
           </div>
 
-        </div>
-      </div>
+        </div><!-- .settings-grid -->
+      </div><!-- .settings-wrap -->
     </section>
 
   </div><!-- .content -->
 
-  <!-- Status bar (22px, bottom) -->
+  <!-- Status bar -->
   <div class="statusbar" id="statusBar">
     <span id="startTime">--</span>
     <span class="led-dot" id="serverState" style="margin-left:10px;"></span>
@@ -948,6 +1009,6 @@
 <!-- TC floating dropdown (appended to body so it is above all panels) -->
 <div id="pgTcDropdown" class="pg-tc-dropdown" style="display:none;"></div>
 
-<script type="module" src="/app.js"></script>
+<script type="module" src="/app.js?v=20260526i"></script>
 </body>
 </html>
