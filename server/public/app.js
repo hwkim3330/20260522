@@ -1775,7 +1775,7 @@ async function loadSequence() {
   try {
     const data = await api('/api/sequence/full');
     const items = data.items || [];
-    if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence (${items.length} events)`;
+    const titleEl = $('scDetailTitle'); if (titleEl) titleEl.textContent = `TEST SEQUENCE (${items.length} events)`;
     renderSequenceRows(items);
   } catch { renderSequenceRows([]); }
 }
