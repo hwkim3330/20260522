@@ -124,7 +124,7 @@ function buildTCP(p, seq) {
   return Buffer.concat([hdr, data]);
 }
 
-function buildIPv4(p, proto, innerPayload) {
+function buildIPv4(p, proto, innerPayload, seq) {
   const ip  = p.ipv4 || {};
   const ttl = ip.ttl ?? 64;
   const tos = ip.tos ?? 0;
@@ -331,13 +331,13 @@ function buildFrame(profile, seq) {
   let frame;
   switch (proto) {
     case 'udp':
-      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 17, buildUDP(p, seq))]);
+      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 17, buildUDP(p, seq), seq)]);
       break;
     case 'icmp':
-      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 1, buildICMP(p, seq))]);
+      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 1, buildICMP(p, seq), seq)]);
       break;
     case 'tcp':
-      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 6, buildTCP(p, seq))]);
+      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, 6, buildTCP(p, seq), seq)]);
       break;
     case 'arp':
       frame = Buffer.concat([buildEthHdr(p, 0x0806), buildARP(p)]);
@@ -345,7 +345,7 @@ function buildFrame(profile, seq) {
     case 'ipv4': {
       // IPv4 block present but no transport-layer block — include IPv4 header with payload
       const ipProto = p.ipv4?.ipProto ?? p.ipv4?.proto ?? 0;
-      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, ipProto, payloadBytes(p, seq))]);
+      frame = Buffer.concat([buildEthHdr(p, 0x0800), buildIPv4(p, ipProto, payloadBytes(p, seq), seq)]);
       break;
     }
     case 'raw': {
