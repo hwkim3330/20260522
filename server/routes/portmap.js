@@ -11,12 +11,12 @@ function getConfigPath(req) {
 
 const DEFAULT_MAP = {
   ports: [
-    { portId: 0, nic: '', description: '' },
-    { portId: 1, nic: '', description: '' },
-    { portId: 2, nic: '', description: '' },
-    { portId: 3, nic: '', description: '' },
-    { portId: 4, nic: '', description: '' },
-    { portId: 5, nic: '', description: '' },
+    { portId: 0, nic: 'enxc84d442001a1', description: 'SW Port 0' },
+    { portId: 1, nic: 'enxc84d44252d37', description: 'SW Port 1' },
+    { portId: 2, nic: 'enxc84d44200135', description: 'SW Port 2' },
+    { portId: 3, nic: 'enxc84d44350003', description: 'SW Port 3' },
+    { portId: 4, nic: 'enx00e04c681336', description: 'SW Port 4' },
+    { portId: 5, nic: 'enxc84d4423f731', description: 'SW Port 5' },
     { portId: 6, nic: '', description: '' },
     { portId: 7, nic: '', description: '' },
   ]

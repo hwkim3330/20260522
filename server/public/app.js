@@ -1,65 +1,6 @@
-const $ = (id) => document.getElementById(id);
-
-const state = {
-  interfaces: [],
-  captureInterfaces: new Set(),
-  captureRows: [],
-  captureIfaceFilter: new Set(), // empty = show all
-  captureTimer: null,
-  serialTimer: null,
-  serialConnected: false,
-  // packet generator
-  packets: [],
-  selectedPacketIdx: -1,
-  selectedBlockType: null,
-  selectedBlockIdx: -1,
-  lastFrameHex: '',
-  layerRanges: new Map(),
-  // TC mode
-  tcPackets: [],
-  tcActivePath: '',
-  tcOriginalRefs: new Set(),
-  activeList: 'pg',  // 'pg' | 'tc'
-  // scenario
-  tcGroups: [],
-  tcSeqList: [],
-  selectedTcSeqIdx: -1,
-  selectedSeqTcIdx: -1,
-  tcNextPacketIdx: 0,
-  tcNextFrameRef: 0,
-  seqItems: [],
-  seqOriginalItems: [],
-  seqItemHeaders: [],
-  selectedSeqRowIdx: -1,
-  seqRunning: false,
-  sendRunning: false,
-  _runAbort: false,
-};
-
-// ── API helper ────────────────────────────────────────────────────────────────
-async function api(path, options = {}) {
-  const res = await fetch(path, {
-    ...options,
-    headers: { 'content-type': 'application/json', ...(options.headers || {}) },
-  });
-  const data = await res.json();
-  if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
-}
-
-function toast(msg, kind = 'info') {
-  const tray = $('toastTray');
-  const el = document.createElement('div');
-  el.className = `toast ${kind}`;
-  el.textContent = msg;
-  tray.appendChild(el);
-  setTimeout(() => el.remove(), 4000);
-}
-
-function setStatus(text, ok = true) {
-  const s = $('status'); if (s) s.textContent = text;
-  const dot = $('serverState'); if (dot) dot.classList.toggle('connected', ok);
-}
+import { $, api, toast, esc, pad2, tsNow, setStatus } from './utils.js';
+import { state } from './state.js';
+import { updateStatusBar, updateSerialUI, appendHyperTerm, startTtyStream, stopTtyStream, refreshSerialStatus, toggleSerial, sendSerial } from './hyper.js';
 
 function populateInterfaceSelects() {
   const opts = state.interfaces.length
@@ -84,17 +25,6 @@ function populateInterfaceSelects() {
   // Refresh portmap NIC dropdowns with updated interface list
   if (_portmap.length) renderPortmapTable();
 }
-
-function esc(v) {
-  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-}
-
-function tsNow() {
-  const d = new Date();
-  return `[${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,'0')}]`;
-}
-
-function pad2(n) { return String(n).padStart(2,'0'); }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function initTabs() {
@@ -2843,6 +2773,18 @@ function stopRunning() {
 }
 
 // ── Event executor ────────────────────────────────────────────────────────────
+function resolveRowIface(row, fallbackIface = '') {
+  if (row._iface) return row._iface;
+  const col = row['Interface'] || row['interface'] || row['NIC'] || row['nic'] || '';
+  if (col) return col;
+  const portCol = String(row['Port'] ?? row['port'] ?? '');
+  if (portCol !== '' && !isNaN(Number(portCol))) {
+    const mapped = _portmap.find(p => p.portId === parseInt(portCol, 10));
+    if (mapped?.nic) return mapped.nic;
+  }
+  return fallbackIface;
+}
+
 async function executeEvent(row, iface) {
   const evType = (row['EventType'] || row['Event Type'] || '').toLowerCase().trim();
 
@@ -2950,7 +2892,26 @@ async function executeEvent(row, iface) {
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
-  // rxverify, fdbwritebucket, fdbreadbucket, unknown → skip
+  if (evType === 'rxverify' || evType === 'rxcapture') {
+    const captureIface = resolveRowIface(row, iface);
+    if (!captureIface) return { ok: false, error: 'No interface — set Interface/Port column or select scInterface' };
+    const timeoutMs = Math.min(parseInt(row['Timeout'] || row['timeout'] || '3000') || 3000, 30000);
+    const minCount  = parseInt(row['Count'] || row['count'] || '1') || 1;
+    const matchStr  = (row['Match'] || row['match'] || '').toLowerCase();
+    try {
+      await api('/api/capture/clear', { method: 'POST', body: '{}' }).catch(() => {});
+      await api('/api/capture/start', { method: 'POST', body: JSON.stringify({ interfaces: [captureIface] }) });
+      await new Promise(r => setTimeout(r, timeoutMs));
+      await api('/api/capture/stop', { method: 'POST', body: '{}' }).catch(() => {});
+      const cap = await api('/api/capture/packets?limit=500');
+      const pkts = cap.rows || [];
+      const matched = matchStr ? pkts.filter(r => JSON.stringify(r.decoded || {}).toLowerCase().includes(matchStr)) : pkts;
+      if (matched.length >= minCount) return { ok: true, detail: `${matched.length} pkts` };
+      return { ok: false, error: `Expected ≥${minCount}, got ${matched.length}` };
+    } catch(e) { return { ok: false, error: e.message }; }
+  }
+
+  // fdbwritebucket, fdbreadbucket, unknown → skip
   await new Promise(r => setTimeout(r, 20));
   return { ok: true, detail: 'Skipped' };
 }
@@ -3705,88 +3666,6 @@ function initSplitter() {
   document.addEventListener('mouseup',()=>{dragging=false;});
 }
 
-// ── HyperTerminal (Serial) ────────────────────────────────────────────────────
-function updateSerialUI(connected, statusText) {
-  state.serialConnected = connected;
-  updateStatusBar();
-  const led=$('serialLed'),st=$('serialState');
-  if(led)led.classList.toggle('connected',connected);
-  const connectBtn=$('serialConnect'),disconnectBtn=$('serialDisconnect');
-  if(connectBtn){connectBtn.disabled=connected;connectBtn.style.opacity=connected?'.5':'1';}
-  if(disconnectBtn){disconnectBtn.disabled=!connected;disconnectBtn.style.opacity=connected?'1':'.5';}
-  if(st&&statusText!==undefined)st.textContent=statusText;
-  const brk=$('serialBrk');if(brk)brk.disabled=!connected;
-}
-
-function appendHyperTerm(text) {
-  const now=new Date(),ts=`[${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}.${String(now.getMilliseconds()).padStart(3,'0')}]`;
-  const line=`${ts}  ${text}\n`;
-  const out=$('serialOutput');
-  if(out){if(out.textContent==='No terminal output.')out.textContent='';out.textContent+=line;out.scrollTop=out.scrollHeight;}
-  const seq=$('seqTerminal');
-  if(seq){if(seq.textContent==='No output.')seq.textContent='';seq.textContent+=line;seq.scrollTop=seq.scrollHeight;}
-}
-
-let _ttyStreamCtrl=null;
-function startTtyStream(session) {
-  if(_ttyStreamCtrl)_ttyStreamCtrl.abort();
-  _ttyStreamCtrl=new AbortController();
-  const url=`/api/tty/stream${session?`?session=${encodeURIComponent(session)}`:''}`;
-  let buf='';
-  fetch(url,{signal:_ttyStreamCtrl.signal}).then(r=>{
-    const reader=r.body.getReader(),decoder=new TextDecoder();
-    function read(){reader.read().then(({done,value})=>{if(done)return;buf+=decoder.decode(value,{stream:true});const parts=buf.split('\n');buf=parts.pop()??'';for(const part of parts){const s=part.trim();if(!s)continue;try{const msg=JSON.parse(s);if(msg.type==='rx'&&msg.hex){const bytes=Uint8Array.from(msg.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));}else if(msg.type==='closed'){updateSerialUI(false,'disconnected');stopTtyStream();}else if(msg.type==='error'){appendHyperTerm(`[ERR] ${msg.message}`);}}catch{/*ignore*/}}read();}).catch(()=>{});}read();}).catch(()=>{});
-}
-
-function stopTtyStream() { if(_ttyStreamCtrl){_ttyStreamCtrl.abort();_ttyStreamCtrl=null;} }
-
-async function refreshSerialStatus() {
-  try {
-    const data=await api('/api/serial/status');
-    const t=data.terminal||{};
-    const ttys=data.ttys||data.ports||t.ports||[];
-    const portSel=$('serialPort');
-    if(portSel){
-      const cur=portSel.value||t.selectedPort||data.session||'';
-      portSel.innerHTML=ttys.map(p=>{const val=p.path||p.portName||p.PortName||p.name||String(p),label=p.manufacturer?`${val}  (${p.manufacturer})`:(p.displayName||p.DisplayName||p.usbProduct||val);return `<option value="${esc(val)}">${esc(label)}</option>`;}).join('');
-      if(!portSel.innerHTML)portSel.innerHTML='<option value="">-- No ports --</option>';
-      if(cur&&portSel.querySelector(`option[value="${cur}"]`))portSel.value=cur;
-    }
-    const baudSel=$('serialBaud');
-    if(baudSel){
-      const cur=baudSel.value||String(t.selectedBaudRate||115200);
-      const rates=t.baudRates||[9600,19200,38400,57600,115200,230400,921600];
-      if(!baudSel.options.length||(t.baudRates&&baudSel.options.length!==rates.length))baudSel.innerHTML=rates.map(b=>`<option value="${b}">${b}</option>`).join('');
-      baudSel.value=t.selectedBaudRate?String(t.selectedBaudRate):cur;
-    }
-    const connected=!!(data.open||data.connected||t.isConnected);
-    const statusTxt=t.connectionStatus||(connected?`connected (${data.session||''})`:' disconnected');
-    updateSerialUI(connected,statusTxt);
-    const out=$('serialOutput');
-    if(out&&t.terminalOutput!==undefined){out.textContent=t.terminalOutput||'No terminal output.';out.scrollTop=out.scrollHeight;}
-  } catch { updateSerialUI(false,'offline'); }
-}
-
-async function toggleSerial(connect) {
-  if(connect===false||state.serialConnected) {
-    stopTtyStream();
-    try{await api('/api/serial/disconnect',{method:'POST',body:'{}'});toast('Serial disconnected','ok');}catch(err){toast(`Disconnect failed: ${err.message}`,'bad');}
-  } else {
-    const port=$('serialPort')?.value,baud=Number($('serialBaud')?.value)||115200;
-    if(!port){toast('Select a port first','warn');return;}
-    try{const res=await api('/api/serial/connect',{method:'POST',body:JSON.stringify({port,baudRate:baud,path:port})});if(!res?.terminal)startTtyStream(res?.session||res?.sessionId||port);toast(`Connected: ${port} @ ${baud} bps`,'ok');}
-    catch(err){toast(`Serial error: ${err.message}`,'bad');}
-  }
-  await refreshSerialStatus();
-}
-
-async function sendSerial() {
-  const inp=$('serialInput');if(!inp?.value.trim())return;
-  const text=inp.value+'\r\n';
-  try{await api('/api/serial/send',{method:'POST',body:JSON.stringify({text})});appendHyperTerm(`> ${inp.value}`);inp.value='';}
-  catch(err){toast(`Send failed: ${err.message}`,'bad');}
-}
-
 // ── Settings ──────────────────────────────────────────────────────────────────
 async function refreshSettings() {
   try {
@@ -3825,10 +3704,13 @@ function renderPortmapTable() {
   if (!_portmap.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No ports defined.</td></tr>'; return; }
   tbody.innerHTML = _portmap.map((p, i) => {
     const nicOpts = state.interfaces.map(ni => `<option value="${esc(ni.name)}"${ni.name===p.nic?' selected':''}>${esc(ni.name)}</option>`).join('');
+    // Show saved NIC as option even if not present on this machine's interface list
+    const savedOpt = (p.nic && !state.interfaces.find(ni => ni.name === p.nic))
+      ? `<option value="${esc(p.nic)}" selected>${esc(p.nic)}</option>` : '';
     return `<tr>
       <td style="text-align:center;">${p.portId}</td>
       <td><select class="pm-nic" data-idx="${i}" style="width:100%;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:2px 4px;font-size:11px;">
-        <option value="">-- NIC --</option>${nicOpts}
+        <option value="">-- NIC --</option>${savedOpt}${nicOpts}
       </select></td>
       <td><input class="pm-desc" data-idx="${i}" value="${esc(p.description||'')}" placeholder="e.g. SW Port ${p.portId} → ETH" style="width:100%;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:2px 5px;font-size:11px;"></td>
       <td style="text-align:center;"><button class="small danger pm-del" data-idx="${i}" title="Remove">✕</button></td>
@@ -3924,14 +3806,6 @@ async function loadLogs() {
     const tests=(data.tests||[]).map(e=>fmtEntry(e,'TEST')),macros=(data.macros||[]).map(e=>fmtEntry(e,'MACRO'));
     const all=[...tests,...macros];box.textContent=all.length?all.join(''):  '(no logs yet)';
   }catch(err){if($('logsBox'))$('logsBox').textContent=`Log load failed: ${err.message}`;}
-}
-
-// ── Status bar ────────────────────────────────────────────────────────────────
-function updateStatusBar() {
-  const pkts=state.captureRows.length;
-  const serial=state.serialConnected?'● Serial':'○ Serial';
-  const cap=state.captureTimer?`● Cap ${pkts}pkts`:`○ Cap ${pkts}pkts`;
-  const sb=$('statusExtra');if(sb)sb.textContent=`${serial}   ${cap}`;
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
