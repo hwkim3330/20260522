@@ -3790,16 +3790,17 @@ async function sendSerial() {
 // ── Settings ──────────────────────────────────────────────────────────────────
 async function refreshSettings() {
   try {
-    const [hr, rr] = await Promise.allSettled([api('/api/health'), api('/api/register/status')]);
+    const [hr, rr] = await Promise.allSettled([api('/api/backend/status'), api('/api/register/status')]);
     const h = hr.status==='fulfilled' ? hr.value : {};
-    const capOk = h.packets?.cap, tdOk = h.packets?.tcpdump;
+    const nn = h.nodeNative || {};
+    const capOk = nn.cap, tdOk = nn.tcpdump;
     const packetSt = capOk ? '● cap npm  (send+capture)' : tdOk ? '● tcpdump  (capture only)' : '○ none  (install Npcap)';
-    const serialOk = h.serial?.available;
-    const platform = h.platform==='win32' ? 'Windows (Npcap)' : h.platform==='linux' ? 'Linux (libpcap)' : h.platform||'—';
-    if($('settingsPlatform'))$('settingsPlatform').textContent = platform;
+    const platform = (h.platform?.platform||h.platform||'');
+    const platformLabel = platform==='win32' ? 'Windows (Npcap)' : platform==='linux' ? 'Linux (libpcap)' : platform||'—';
+    if($('settingsPlatform'))$('settingsPlatform').textContent = platformLabel;
     if($('settingsPackets'))$('settingsPackets').textContent  = packetSt;
-    if($('settingsSerial'))$('settingsSerial').textContent    = serialOk ? `● available${h.serial?.open?' (open)':''}` : '○ not available';
-    if($('settingsVersion'))$('settingsVersion').textContent  = h.server?.version || '—';
+    if($('settingsSerial'))$('settingsSerial').textContent    = nn.serial ? `● available${nn.serialOpen?' (open)':''}` : '○ not available';
+    if($('settingsVersion'))$('settingsVersion').textContent  = '2.0.0';
     const r = rr.status==='fulfilled' ? rr.value : {};
     if($('settingsWorkerState'))$('settingsWorkerState').textContent = `${r.serialConnected?'● serial':'○ serial'}  base: ${r.baseAddress||'—'}`;
     if($('settingsBaseAddr') && r.baseAddress) $('settingsBaseAddr').value = r.baseAddress;
