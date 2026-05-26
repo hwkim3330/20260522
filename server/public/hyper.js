@@ -71,6 +71,8 @@ export function stopTtyStream() {
   if (_ttyStreamCtrl) { _ttyStreamCtrl.abort(); _ttyStreamCtrl = null; }
 }
 
+export function isTtyStreamActive() { return _ttyStreamCtrl !== null; }
+
 export async function refreshSerialStatus() {
   try {
     const data = await api('/api/serial/status');

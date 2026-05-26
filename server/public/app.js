@@ -1,6 +1,6 @@
 import { $, api, toast, esc, pad2, tsNow, setStatus } from './utils.js';
 import { state } from './state.js';
-import { updateStatusBar, updateSerialUI, appendHyperTerm, startTtyStream, stopTtyStream, refreshSerialStatus, toggleSerial, sendSerial } from './hyper.js';
+import { updateStatusBar, updateSerialUI, appendHyperTerm, startTtyStream, stopTtyStream, isTtyStreamActive, refreshSerialStatus, toggleSerial, sendSerial } from './hyper.js';
 
 function populateInterfaceSelects() {
   const opts = state.interfaces.length
@@ -3812,11 +3812,14 @@ async function loadLogs() {
 function initWebSocket() {
   const ws=new WebSocket(`ws://${location.host}`);
   ws.onmessage=({data})=>{try{const msg=JSON.parse(data);if(msg.type==='workerEvent'){const p=msg.payload||{};
-    if(p.kind==='serial'&&p.rxType==='rx'&&p.hex){
-      const bytes=Uint8Array.from(p.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));
-      const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);
-      text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));
-    }else if(p.type==='serialData'||p.type==='terminal'){appendHyperTerm(p.text||p.data||'');}
+    // Skip serial data from WebSocket when TTY stream is already delivering it (prevents double display)
+    if(!isTtyStreamActive()){
+      if(p.kind==='serial'&&p.rxType==='rx'&&p.hex){
+        const bytes=Uint8Array.from(p.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));
+        const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);
+        text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));
+      }else if(p.type==='serialData'||p.type==='terminal'){appendHyperTerm(p.text||p.data||'');}
+    }
   }}catch{/*ignore*/}};
   ws.onclose=()=>setTimeout(initWebSocket,3000);
 }
