@@ -48,11 +48,16 @@ async function runTest(testName) {
 
       let row;
       try {
+        const raw  = step.EventType || step.eventType || step.type || '';
+        const type = (raw || inferStepType(step)).toLowerCase().replace(/\s+/g, '');
+        console.log(`[autoEngine] step ${i+1}: name="${step.Name||step.name}" EventType="${step.EventType||step.eventType||''}" → type="${type}" addr="${step.Address||step.address||''}" value="${step.Value||step.value||''}"`);
         const r = await runStep(step);
-        row = { step: i + 1, name: step.name || step.eventType || step.type, result: r.pass ? 'PASS' : 'FAIL', detail: r.detail };
+        console.log(`[autoEngine] step ${i+1} result: ${r.pass?'PASS':'FAIL'} — ${r.detail||''}`);
+        row = { step: i + 1, name: step.Name || step.name || step.eventType || step.type, result: r.pass ? 'PASS' : 'FAIL', detail: r.detail };
         if (r.pass) passed++; else failed++;
       } catch (e) {
-        row = { step: i + 1, name: step.name || step.type, result: 'FAIL', detail: e.message };
+        console.error(`[autoEngine] step ${i+1} exception:`, e.message);
+        row = { step: i + 1, name: step.Name || step.name || step.type, result: 'FAIL', detail: e.message };
         failed++;
       }
       _state.rows.push(row);
@@ -69,51 +74,174 @@ async function runTest(testName) {
   }
 }
 
+function inferStepType(step) {
+  const addr     = (step.Address  || step.address  || step.offset  || '').toString().trim();
+  const value    = (step.Value    || step.value    || '').toString().trim();
+  const mask     = (step.Mask     || step.mask     || '').toString().trim();
+  const expected = (step.Expected || step.expected || '').toString().trim();
+  const mac      = (step.MAC      || step.mac      || '').toString().trim();
+  const frameRef = (step.FrameRef || step.frameRef || step.frameref || '').toString().trim();
+  const name     = (step.Name     || step.name     || '').toString().toLowerCase();
+  const timeout  = (step.Timeout  || step.timeout  || '').toString().trim();
+  const delayMs  = (step.delayMs  || '').toString().trim();
+
+  if (frameRef && frameRef !== '-') return 'sendpacket';
+  if (name.includes('flush')) return 'fdbflush';
+  if (mac && mac !== '-') return 'fdbread';
+  if (addr && addr !== '-') {
+    if (expected && expected !== '-') return 'registerexpect';
+    if (value && value !== '-') return 'registerwrite';
+    return 'registerread';
+  }
+  if (delayMs && delayMs !== '-') return 'delay';
+  if (timeout && timeout !== '-') return 'delay';
+  return 'delay';
+}
+
 async function runStep(step) {
-  const type = (step.eventType || step.type || 'delay').toLowerCase();
+  const raw  = step.EventType || step.eventType || step.type || '';
+  const type = (raw || inferStepType(step)).toLowerCase().replace(/\s+/g, '');
   const { packetBackend, switchProtocol } = _services;
 
   switch (type) {
 
-    case 'delay':
-      await delay(step.delayMs ?? 100);
-      return { pass: true, detail: `${step.delayMs ?? 100}ms` };
+    case 'delay': {
+      // CSV 'Timeout' 컬럼(예: "100ms") 또는 delayMs 필드 사용
+      const rawMs = step.delayMs ?? step.DelayMs ?? step.Timeout ?? step.timeout ?? 100;
+      const ms = typeof rawMs === 'string' ? (parseInt(rawMs) || 100) : (rawMs || 100);
+      await delay(ms);
+      return { pass: true, detail: `${ms}ms` };
+    }
 
     case 'registerwrite': {
-      await switchProtocol.registerWrite({
-        offset: step.address ?? step.offset,
-        value:  step.value,
-      });
-      return { pass: true, detail: `write ${step.value} → ${step.address ?? step.offset}` };
+      const addr = step.Address ?? step.address ?? step.offset ?? '0';
+      const val  = step.Value   ?? step.value   ?? '0';
+      await switchProtocol.registerWrite({ offset: addr, value: val });
+      return { pass: true, detail: `write ${val} → ${addr}` };
     }
 
     case 'registerread': {
-      const r = await switchProtocol.registerRead({ offset: step.address ?? step.offset });
+      const addr = step.Address ?? step.address ?? step.offset ?? '0';
+      const r = await switchProtocol.registerRead({ offset: addr });
       return { pass: true, detail: `read → ${r.value}` };
     }
 
     case 'registerwait':
     case 'registerexpect': {
-      const mask     = parseHex(step.mask     ?? '0xFFFFFFFF');
-      const expected = parseHex(step.expected ?? '0x00000000');
-      const timeout  = step.timeoutMs ?? 1000;
+      const addr     = step.Address  ?? step.address  ?? step.offset  ?? '0';
+      const maskStr  = step.Mask     ?? step.mask     ?? '0xFFFFFFFF';
+      const expStr   = step.Expected ?? step.expected ?? '0x00000000';
+      const rawTo    = step.Timeout  ?? step.timeout  ?? step.timeoutMs ?? 1000;
+      const timeout  = typeof rawTo === 'string' ? (parseInt(rawTo) || 1000) : (rawTo || 1000);
+      const mask     = parseHex(maskStr);
+      const expected = parseHex(expStr);
       const deadline = Date.now() + timeout;
       let last = 0;
-      while (Date.now() < deadline) {
-        const r = await switchProtocol.registerRead({ offset: step.address ?? step.offset });
+      while (true) {
+        const r = await switchProtocol.registerRead({ offset: addr });
         last = r.raw ?? parseHex(r.value);
         if ((last & mask) === (expected & mask))
           return { pass: true, detail: `got 0x${last.toString(16)}` };
-        await delay(20);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await delay(Math.min(50, remaining));
       }
       return { pass: false, detail: `timeout: last=0x${last.toString(16)}, expected=0x${expected.toString(16)}&mask` };
     }
 
+    // ── FdbInitialize / FdbFlush ────────────────────────────────────────────────
+    case 'fdbinitialize':
+    case 'fdbflush': {
+      await switchProtocol.fdbFlush({});
+      return { pass: true, detail: 'FDB flushed' };
+    }
+
+    // ── FdbWrite (Port='0b000001' 이진수 파싱) ──────────────────────────────────
+    case 'fdbwrite': {
+      const mac    = step.MAC || step.mac || '';
+      const vlanId = parseInt(step.VlanID || step.VlanId || step.vlanid || '0') || 0;
+      const portRaw = String(step.Port || step.port || '0').trim();
+      const port   = (portRaw.startsWith('0b') || portRaw.startsWith('0B'))
+        ? parseInt(portRaw.slice(2), 2) || 0
+        : parseInt(portRaw) || 0;
+      if (!mac || mac === '-') return { pass: false, detail: 'No MAC' };
+      await switchProtocol.fdbWrite({ mac, vlanId, port });
+      const waitMs = parseInt(step.Waiting || step.waiting || '0') || 0;
+      if (waitMs > 0) await delay(waitMs);
+      return { pass: true, detail: `FdbWrite mac=${mac} port=${port}` };
+    }
+
+    // ── FdbRead ─────────────────────────────────────────────────────────────────
+    case 'fdbread': {
+      const mac    = step.MAC || step.mac || '';
+      const vlanId = parseInt(step.VlanID || step.VlanId || step.vlanid || '0') || 0;
+      if (!mac || mac === '-') return { pass: false, detail: 'No MAC' };
+      const entry = await switchProtocol.fdbRead({ mac, vlanId });
+      return entry.found
+        ? { pass: true,  detail: `found mac=${entry.mac} port=${entry.port}` }
+        : { pass: false, detail: `MAC not found: ${mac}` };
+    }
+
+    // ── FdbReadBucket (Bucket, Slot, Expected=MAC) ──────────────────────────────
+    case 'fdbreadbucket': {
+      const bucket   = parseInt(step.Bucket || step.bucket || '0') || 0;
+      const slotMask = parseHex(step.Slot || step.slot || '0');
+      const expected = (step.Expected || step.expected || '').trim();
+      try {
+        const entry = await switchProtocol.fdbReadBucket({ bucket, slot: slotMask });
+        if (expected && expected !== '-') {
+          const match = (entry.mac || '').toUpperCase() === expected.toUpperCase();
+          return match
+            ? { pass: true,  detail: `bucket=${bucket} slot=0x${slotMask.toString(16)} mac=${entry.mac}` }
+            : { pass: false, detail: `MAC mismatch: got ${entry.mac}, expected ${expected}` };
+        }
+        return { pass: true, detail: `bucket=${bucket} mac=${entry.mac}` };
+      } catch (e) {
+        return { pass: false, detail: `FdbReadBucket error: ${e.message}` };
+      }
+    }
+
+    // ── Packet send ─────────────────────────────────────────────────────────────
     case 'send':
-    case 'sendpacket': {
+    case 'sendpacket':
+    case 'packet': {
       const profile = step.profile || step;
-      const result  = await packetBackend.sendPackets(require('./frameBuilder').normalizeProfile(profile));
-      return { pass: true, detail: `${result.framesSent} frames sent` };
+      try {
+        const result = await packetBackend.sendPackets(require('./frameBuilder').normalizeProfile(profile));
+        return { pass: true, detail: `${result.framesSent ?? 1} frames sent` };
+      } catch (e) {
+        return { pass: false, detail: `Send failed: ${e.message}` };
+      }
+    }
+
+    // ── RxVerify — start capture, poll until expected frames arrive, stop ──────
+    case 'rxverify': {
+      const ifaces    = step.interfaces ?? (step.captureInterface ? [step.captureInterface] : []);
+      const filter    = (step.captureFilter ?? '').toLowerCase();
+      const expected  = parseInt(step.captureExpected ?? 1) || 1;
+      const rawTo     = step.timeoutMs ?? step.Timeout ?? step.timeout ?? 3000;
+      const timeoutMs = (typeof rawTo === 'string' ? parseInt(rawTo) : rawTo) || 3000;
+
+      packetBackend.clearCapture();
+      packetBackend.startCapture(ifaces, '', () => {}, () => {});
+
+      const deadline = Date.now() + timeoutMs;
+      let matched = 0;
+      while (Date.now() < deadline) {
+        await delay(200);
+        const { rows } = packetBackend.getCaptures(10000, 0);
+        const hits = filter
+          ? rows.filter(r => (r.frameHex || '').toLowerCase().includes(filter)
+              || JSON.stringify(r.decoded || {}).toLowerCase().includes(filter))
+          : rows;
+        matched = hits.length;
+        if (matched >= expected) break;
+      }
+      packetBackend.stopCapture();
+
+      return matched >= expected
+        ? { pass: true,  detail: `${matched}/${expected} frames captured` }
+        : { pass: false, detail: `RxVerify: only ${matched}/${expected} frames in ${timeoutMs}ms` };
     }
 
     case 'capture':

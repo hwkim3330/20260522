@@ -12,13 +12,10 @@ router.get('/logs', (req, res) => {
     const macrosDir = req.app.locals.macrosDir;
     const limit     = parseInt(req.query.limit ?? '50');
 
-    // Persistent state files stored in the same dir — exclude them from run logs
-    const STATE_FILES = new Set(['test-cases.json', 'sequence.json', '__run_sequence__.json', 'portmap.json']);
-
     const readDir = (dir) => {
       if (!fs.existsSync(dir)) return [];
       return fs.readdirSync(dir)
-        .filter(f => f.endsWith('.json') && !STATE_FILES.has(f))
+        .filter(f => f.endsWith('.json'))
         .sort().reverse()
         .slice(0, limit)
         .map(f => {

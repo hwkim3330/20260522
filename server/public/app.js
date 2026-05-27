@@ -4,7 +4,7 @@ const state = {
   interfaces: [],
   captureInterfaces: new Set(),
   captureRows: [],
-  captureIfaceFilter: new Set(),
+  captureIfaceFilter: new Set(), // empty = show all
   captureTimer: null,
   serialTimer: null,
   serialConnected: false,
@@ -19,7 +19,7 @@ const state = {
   tcPackets: [],
   tcActivePath: '',
   tcOriginalRefs: new Set(),
-  activeList: 'pg',
+  activeList: 'pg',  // 'pg' | 'tc'
   // scenario
   tcGroups: [],
   tcSeqList: [],
@@ -31,6 +31,8 @@ const state = {
   seqOriginalItems: [],
   seqItemHeaders: [],
   selectedSeqRowIdx: -1,
+  editingSeqRowIdx: -1,
+  seqRenderMode: 'csv',
   seqRunning: false,
   sendRunning: false,
   _runAbort: false,
@@ -58,7 +60,7 @@ function toast(msg, kind = 'info') {
 
 function setStatus(text, ok = true) {
   const s = $('status'); if (s) s.textContent = text;
-  const dot = $('serverState'); if (dot) dot.classList.toggle('connected', ok);
+  const dot = $('serverState'); if (dot) dot.classList.toggle('bad', !ok);
 }
 
 function populateInterfaceSelects() {
@@ -81,8 +83,6 @@ function populateInterfaceSelects() {
     sel.innerHTML = '<option value="">-- iface --</option>' + state.interfaces.map(i => `<option value="${esc(i.name)}"${i.name===cur?' selected':''}>${esc(i.name)}${i.state==='up'?' ●':''}</option>`).join('');
     sel.value = cur;
   });
-  // Refresh portmap NIC dropdowns with updated interface list
-  if (_portmap.length) renderPortmapTable();
 }
 
 function esc(v) {
@@ -105,7 +105,6 @@ function initTabs() {
       tab.classList.add('active');
       $(tab.dataset.view)?.classList.add('active');
       if (tab.dataset.view === 'hyperTermView') refreshSerialStatus();
-      if (tab.dataset.view === 'settingsView') { refreshSettings(); loadLogs(); }
       if (tab.dataset.view === 'packetGenView') {
         renderPacketList();
         updateTcUI();
@@ -1775,7 +1774,7 @@ async function loadSequence() {
   try {
     const data = await api('/api/sequence/full');
     const items = data.items || [];
-    const titleEl = $('scDetailTitle'); if (titleEl) titleEl.textContent = `TEST SEQUENCE (${items.length} events)`;
+    if ($('scenarioTitle')) $('scenarioTitle').textContent = `Test Sequence (${items.length} events)`;
     renderSequenceRows(items);
   } catch { renderSequenceRows([]); }
 }
@@ -1854,6 +1853,7 @@ function renderSequenceRows(items) {
   const tbody = $('sequenceRows');
   if (!tbody) return;
   state.seqItems = items || [];
+  state.seqRenderMode = 'tc';
   if (!items || !items.length) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty">No sequence. Select a TC and press ›.</td></tr>';
     return;
@@ -1864,7 +1864,8 @@ function renderSequenceRows(items) {
     const mac     = item.mac || '';
     const details = seqEventSummary(item);
     const timeout = item.delayMs ? `${item.delayMs}ms` : (item.timeoutMs ? `${item.timeoutMs}ms` : '');
-    return `<tr data-idx="${i}" draggable="true">
+    const sel     = i === state.editingSeqRowIdx ? ' row-selected' : '';
+    return `<tr data-idx="${i}" draggable="true" class="${sel}">
       <td style="color:var(--muted);">${i+1}</td>
       <td>${esc(name)}</td>
       <td><span class="ev-badge ev-${esc(evType.toLowerCase())}">${esc(evType)}</span></td>
@@ -1874,6 +1875,14 @@ function renderSequenceRows(items) {
       <td style="font-size:10px;">${esc(item.status || '')}</td>
     </tr>`;
   }).join('');
+  tbody.querySelectorAll('tr').forEach((tr, i) => {
+    tr.addEventListener('click', () => {
+      state.selectedSeqRowIdx = i;
+      tbody.querySelectorAll('tr').forEach(r => r.classList.remove('row-selected'));
+      tr.classList.add('row-selected');
+      showEventEditorForRow(state.seqItems[i], i);
+    });
+  });
 }
 
 // TC Sequence (bottom panel)
@@ -1987,6 +1996,126 @@ const EVENT_API_TYPE = {
   FdbWaitFor:'fdbWaitFor', FdbInitialize:'fdbInitialize', RxVerify:'rxVerify',
 };
 
+// Reverse map: lowercased API-type string → EVENT_FIELDS kind key
+const EVENT_KIND_BY_API_TYPE = (() => {
+  const m = {};
+  for (const [k, v] of Object.entries(EVENT_API_TYPE)) m[v.toLowerCase()] = k;
+  // Common aliases used in CSV files / autoEngine
+  m['registerwait']  = 'RegVerify';
+  m['fdbflush']      = 'FdbInitialize';
+  m['fdbinitialize'] = 'FdbInitialize';
+  return m;
+})();
+
+/** Read a field value from a row in either TC-step (camelCase) or CSV (PascalCase) format. */
+function getRowField(row, fieldId) {
+  const v = row[fieldId];
+  if (v !== undefined && v !== '' && v !== '-') return v;
+  const csvAlt = {
+    offset:           ['Address', 'address'],
+    value:            ['Value'],
+    mac:              ['MAC', 'mac', 'Mac'],
+    vlanId:           ['VlanID', 'VlanId', 'vlanid'],
+    port:             ['Port'],
+    bucket:           ['Bucket'],
+    slot:             ['Slot'],
+    expected:         ['Expected'],
+    mask:             ['Mask'],
+    timeoutMs:        ['Timeout', 'timeout'],
+    delayMs:          ['Timeout', 'timeout', 'DelayMs'],
+    captureInterface: ['CaptureInterface'],
+    captureFilter:    ['CaptureFilter', 'Filter'],
+    captureExpected:  ['CaptureExpected'],
+  };
+  for (const alt of (csvAlt[fieldId] || [])) {
+    const a = row[alt];
+    if (a !== undefined && a !== '' && a !== '-') {
+      if ((fieldId === 'timeoutMs' || fieldId === 'delayMs') && typeof a === 'string') {
+        const n = parseInt(a); return isNaN(n) ? a : n;
+      }
+      return a;
+    }
+  }
+  return null;
+}
+
+/**
+ * Populate the event editor with an existing row's values and switch the
+ * button to "Update Row" mode so it overwrites instead of appending.
+ */
+function showEventEditorForRow(row, rowIdx) {
+  const evType = (row.eventType || row.EventType || row['Event Type'] || row.type || '')
+    .toLowerCase().replace(/\s+/g, '');
+  const kind = EVENT_KIND_BY_API_TYPE[evType];
+  if (!kind) { toast(`Unknown event type: "${evType}"`, 'warn'); return; }
+
+  showEventEditor(kind);  // populates default values
+
+  for (const f of EVENT_FIELDS[kind] || []) {
+    const val = getRowField(row, f.id);
+    if (val !== null && val !== undefined) {
+      const el = $(`eef-${f.id}`); if (el) el.value = val;
+    }
+  }
+
+  const addBtn = $('addToSequence');
+  if (addBtn) {
+    addBtn.textContent = 'Update Row';
+    addBtn.dataset.editMode  = 'update';
+    addBtn.dataset.editRowIdx = String(rowIdx);
+  }
+  state.editingSeqRowIdx = rowIdx;
+}
+
+function resetEditorToAddMode() {
+  const addBtn = $('addToSequence');
+  if (addBtn) {
+    addBtn.textContent = 'Add to Sequence';
+    delete addBtn.dataset.editMode;
+    delete addBtn.dataset.editRowIdx;
+  }
+  state.editingSeqRowIdx = -1;
+}
+
+function updateRowFromEditor() {
+  const btn = $('addToSequence');
+  const kind = btn?.dataset.evKind;
+  const rowIdx = parseInt(btn?.dataset.editRowIdx ?? '-1');
+  if (!kind || rowIdx < 0) return;
+
+  if (state.seqRenderMode === 'tc') {
+    const rows = state.seqItems;
+    if (!rows[rowIdx]) return;
+    const step = rows[rowIdx];
+    step.eventType = EVENT_API_TYPE[kind] || kind.toLowerCase();
+    for (const f of EVENT_FIELDS[kind] || []) {
+      const el = $(`eef-${f.id}`); if (!el) continue;
+      step[f.id] = f.type === 'number' ? Number(el.value) : el.value;
+    }
+    renderSequenceRows(rows);
+  } else {
+    const rows = _getSeqRows();
+    if (!rows[rowIdx]) return;
+    const row = rows[rowIdx];
+    row.EventType = EVENT_API_TYPE[kind] || kind.toLowerCase();
+    const toCSV = {
+      offset: 'Address', value: 'Value', mac: 'MAC', vlanId: 'VlanID', port: 'Port',
+      bucket: 'Bucket', slot: 'Slot', expected: 'Expected', mask: 'Mask',
+      timeoutMs: 'Timeout', delayMs: 'Timeout',
+      captureInterface: 'CaptureInterface', captureFilter: 'CaptureFilter', captureExpected: 'CaptureExpected',
+    };
+    for (const f of EVENT_FIELDS[kind] || []) {
+      const el = $(`eef-${f.id}`); if (!el) continue;
+      const val = f.type === 'number' ? Number(el.value) : el.value;
+      row[toCSV[f.id] || f.id] = String(val);
+    }
+    _setSeqRows(rows);
+  }
+
+  resetEditorToAddMode();
+  toast('Row updated', 'ok');
+}
+
 function showEventEditor(kind) {
   document.querySelectorAll('.palette-item, .ev-add-btn').forEach(el => el.classList.toggle('active', el.dataset.event === kind));
   const titleEl = $('eventEditorTitle'), fieldsEl = $('eventEditorFields'), addBtn = $('addToSequence');
@@ -1996,7 +2125,14 @@ function showEventEditor(kind) {
   fieldsEl.innerHTML = fields.length
     ? fields.map(f => `<div class="field"><label>${esc(f.label)}</label><input id="eef-${f.id}" type="${f.type}" value="${esc(f.def)}" placeholder="${esc(f.label)}"></div>`).join('')
     : `<p style="font-size:11px;color:var(--muted);padding:0 0 4px;">No parameters required.</p>`;
-  if (addBtn) { addBtn.disabled = false; addBtn.dataset.evKind = kind; }
+  if (addBtn) {
+    addBtn.disabled = false;
+    addBtn.dataset.evKind = kind;
+    addBtn.textContent = 'Add to Sequence';
+    delete addBtn.dataset.editMode;
+    delete addBtn.dataset.editRowIdx;
+  }
+  state.editingSeqRowIdx = -1;
 }
 
 async function addEventFromEditor() {
@@ -2410,6 +2546,7 @@ function renderCsvSequence(rows) {
   const tbody = $('sequenceRows');
   if (!tbody) return;
   state.seqItems = rows || [];
+  state.seqRenderMode = 'csv';
   state.seqItems.forEach((r, i) => { r['Index'] = String(i + 1); });
   if (state.selectedSeqRowIdx >= rows.length) state.selectedSeqRowIdx = rows.length - 1;
   if (!rows || !rows.length) {
@@ -2464,6 +2601,7 @@ function renderCsvSequence(rows) {
       state.selectedSeqRowIdx = i;
       tbody.querySelectorAll('tr').forEach(r => r.classList.remove('row-selected'));
       tr.classList.add('row-selected');
+      showEventEditorForRow(rows[i], i);
     });
     tr.addEventListener('dragstart', e => {
       _seqDragFrom = i;
@@ -2842,20 +2980,16 @@ function stopRunning() {
   setRunState(null);
 }
 
-// ── Event executor ────────────────────────────────────────────────────────────
-function resolveRowIface(row, fallbackIface = '') {
-  if (row._iface) return row._iface;
-  const col = row['Interface'] || row['interface'] || row['NIC'] || row['nic'] || '';
-  if (col) return col;
-  const portCol = String(row['Port'] ?? row['port'] ?? '');
-  if (portCol !== '' && !isNaN(Number(portCol))) {
-    const mapped = _portmap.find(p => p.portId === parseInt(portCol, 10));
-    if (mapped?.nic) return mapped.nic;
-  }
-  return fallbackIface;
+// ── 이진수 포트 파싱 (0b000001 → 1) ─────────────────────────────────────────
+function parseBinPort(s) {
+  const t = String(s || '0').trim();
+  if (t.startsWith('0b') || t.startsWith('0B')) return parseInt(t.slice(2), 2) || 0;
+  return parseInt(t) || 0;
 }
 
+// ── Event executor ────────────────────────────────────────────────────────────
 async function executeEvent(row, iface) {
+  // 'Event Type'(공백) 와 'EventType' 모두 지원
   const evType = (row['EventType'] || row['Event Type'] || '').toLowerCase().trim();
 
   if (evType === 'delay') {
@@ -2864,47 +2998,56 @@ async function executeEvent(row, iface) {
     return { ok: true };
   }
 
+  // ── RegWrite (TC_LinkStatus: 'RegWrite', TC_AutoLearning: 'RegWrite') ─────────
   if (evType === 'regwrite' || evType === 'registerwrite') {
     const offset = row['Address'] || row['address'] || '';
     const value  = row['Value']   || row['value']   || '';
-    if (!offset) return { ok: false, error: 'No Address' };
+    if (!offset || offset === '-') return { ok: false, error: 'No Address' };
     try {
       const data = await api('/api/register/write', { method: 'POST', body: JSON.stringify({ offset, value }) });
       return data.ok !== false ? { ok: true } : { ok: false, error: data.error || 'Write failed' };
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
+  // ── RegRead ───────────────────────────────────────────────────────────────────
   if (evType === 'regread' || evType === 'registerread') {
     const offset = row['Address'] || row['address'] || '';
-    if (!offset) return { ok: false, error: 'No Address' };
+    if (!offset || offset === '-') return { ok: false, error: 'No Address' };
     try {
       const data = await api('/api/register/read', { method: 'POST', body: JSON.stringify({ offset }) });
       return data.ok !== false ? { ok: true, detail: data.value || '' } : { ok: false, error: data.error || 'Read failed' };
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
-  if (evType === 'regverify' || evType === 'registerverify' || evType === 'registerexpect' || evType === 'verify') {
+  // ── Verify / RegVerify (TC_LinkStatus: 'Verify') ──────────────────────────────
+  if (evType === 'verify' || evType === 'regverify' || evType === 'registerverify' || evType === 'registerexpect') {
     const offset    = row['Address']  || row['address']  || '';
     const expected  = row['Expected'] || row['expected'] || '0x0';
     const mask      = row['Mask']     || row['mask']     || '0xFFFFFFFF';
-    const timeoutMs = parseInt(row['Timeout'] || row['timeout'] || '1000') || 1000;
-    if (!offset) return { ok: false, error: 'No Address' };
+    const rawTo     = row['Timeout']  || row['timeout']  || '1000';
+    const timeoutMs = parseInt(rawTo) || 1000;
+    if (!offset || offset === '-') return { ok: false, error: 'No Address' };
+    const expVal  = parseInt(String(expected).replace(/^0x/i,''), 16) || 0;
+    const maskVal = parseInt(String(mask).replace(/^0x/i,''), 16) || 0xFFFFFFFF;
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    let lastVal = null;
+    while (true) {
       try {
         const data = await api('/api/register/read', { method: 'POST', body: JSON.stringify({ offset }) });
         if (data.ok === false) return { ok: false, error: data.error || 'Read failed' };
-        const actual  = parseInt(data.value || '0', 16) || data.valueDec || 0;
-        const expVal  = parseInt(expected, 16) || 0;
-        const maskVal = parseInt(mask, 16) !== 0 ? parseInt(mask, 16) : 0xFFFFFFFF;
+        const actual = parseInt(String(data.value || '0').replace(/^0x/i,''), 16) || 0;
+        lastVal = actual;
         if ((actual & maskVal) === (expVal & maskVal))
           return { ok: true, detail: `0x${actual.toString(16).toUpperCase()}` };
       } catch { /* retry */ }
-      await new Promise(r => setTimeout(r, 100));
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise(r => setTimeout(r, Math.min(100, remaining)));
     }
-    return { ok: false, error: `Verify timeout (${timeoutMs}ms)` };
+    return { ok: false, error: `Verify timeout (${timeoutMs}ms), last=0x${(lastVal||0).toString(16).toUpperCase()}` };
   }
 
+  // ── FdbInitialize / FdbFlush ──────────────────────────────────────────────────
   if (evType === 'fdbinitialize' || evType === 'fdbflush') {
     try {
       const data = await api('/api/fdb/flush', { method: 'POST', body: JSON.stringify({}) });
@@ -2912,43 +3055,70 @@ async function executeEvent(row, iface) {
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
+  // ── FdbWrite (TC_Fowarding_Static: Port='0b000001' 이진수) ────────────────────
   if (evType === 'fdbwrite') {
     const mac    = row['MAC'] || row['mac'] || '';
-    const vlanId = parseInt(row['VlanId'] || row['vlanid'] || '0') || 0;
-    const port   = parseInt(row['Port']   || row['port']   || '0') || 0;
-    if (!mac) return { ok: false, error: 'No MAC' };
+    const vlanId = parseInt(row['VlanID'] || row['VlanId'] || row['vlanid'] || '0') || 0;
+    const port   = parseBinPort(row['Port'] || row['port'] || '0');
+    if (!mac || mac === '-') return { ok: false, error: 'No MAC' };
     try {
       const data = await api('/api/fdb/write', { method: 'POST', body: JSON.stringify({ mac, vlanId, port }) });
+      // FdbWrite 후 Waiting 딜레이 처리 (TC_Fowarding_Static: Waiting='10ms')
+      const waitMs = parseInt(row['Waiting'] || row['waiting'] || '0') || 0;
+      if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
       return data.ok !== false ? { ok: true } : { ok: false, error: data.error || 'FDB write failed' };
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
+  // ── FdbRead ───────────────────────────────────────────────────────────────────
   if (evType === 'fdbread') {
     const mac    = row['MAC'] || row['mac'] || '';
-    const vlanId = parseInt(row['VlanId'] || row['vlanid'] || '0') || 0;
-    if (!mac) return { ok: false, error: 'No MAC' };
+    const vlanId = parseInt(row['VlanID'] || row['VlanId'] || row['vlanid'] || '0') || 0;
+    if (!mac || mac === '-') return { ok: false, error: 'No MAC' };
     try {
       const data = await api('/api/fdb/read', { method: 'POST', body: JSON.stringify({ mac, vlanId }) });
-      return data.ok !== false ? { ok: true, detail: JSON.stringify(data.entry || {}) } : { ok: false, error: data.error || 'FDB read failed' };
+      if (data.ok === false) return { ok: false, error: data.error || 'FDB read failed' };
+      const found = data.entry?.found ?? false;
+      return found ? { ok: true, detail: JSON.stringify(data.entry) } : { ok: false, error: `MAC not found: ${mac}` };
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
+  // ── FdbReadBucket (TC_BucketCapacityCheck: Bucket, Slot, Expected=MAC) ────────
+  if (evType === 'fdbreadbucket') {
+    const bucket   = parseInt(row['Bucket'] || row['bucket'] || '0') || 0;
+    const slotMask = parseInt(String(row['Slot'] || row['slot'] || '0').replace(/^0x/i,''), 16) || 0;
+    const expected = (row['Expected'] || row['expected'] || '').trim();
+    try {
+      const data = await api('/api/fdb/read-bucket', { method: 'POST', body: JSON.stringify({ bucket, slot: slotMask }) });
+      if (data.ok === false) return { ok: false, error: data.error || 'FdbReadBucket failed' };
+      if (expected && expected !== '-') {
+        const got = (data.entry?.mac || '').toUpperCase();
+        const exp = expected.toUpperCase();
+        return got === exp ? { ok: true, detail: `bucket=${bucket} slot=0x${slotMask.toString(16)} mac=${got}` }
+                           : { ok: false, error: `MAC mismatch: got ${got}, expected ${exp}` };
+      }
+      return { ok: true, detail: JSON.stringify(data.entry || {}) };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
+
+  // ── FdbWaitFor ────────────────────────────────────────────────────────────────
   if (evType === 'fdbwaitfor') {
     const mac       = row['MAC'] || row['mac'] || '';
-    const vlanId    = parseInt(row['VlanId'] || row['vlanid'] || '0') || 0;
+    const vlanId    = parseInt(row['VlanID'] || row['VlanId'] || row['vlanid'] || '0') || 0;
     const timeoutMs = parseInt(row['Timeout'] || row['timeout'] || '5000') || 5000;
-    if (!mac) return { ok: false, error: 'No MAC' };
+    if (!mac || mac === '-') return { ok: false, error: 'No MAC' };
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
         const data = await api('/api/fdb/read', { method: 'POST', body: JSON.stringify({ mac, vlanId }) });
-        if (data.ok !== false && data.entry) return { ok: true };
+        if (data.ok !== false && data.entry?.found) return { ok: true };
       } catch { /* retry */ }
       await new Promise(r => setTimeout(r, 200));
     }
-    return { ok: false, error: `FDB entry not found (${timeoutMs}ms)` };
+    return { ok: false, error: `FDB entry not found (${timeoutMs}ms): ${mac}` };
   }
 
+  // ── Packet send ───────────────────────────────────────────────────────────────
   if (evType === 'packet') {
     const frameRef = row['FrameRef'] || row['frameref'] || row['Name'] || '';
     const pkt = (state.tcPackets || []).find(p => p.name === frameRef) || getActivePackets().find(p => p.name === frameRef);
@@ -2962,28 +3132,41 @@ async function executeEvent(row, iface) {
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
-  if (evType === 'rxverify' || evType === 'rxcapture') {
-    const captureIface = resolveRowIface(row, iface);
-    if (!captureIface) return { ok: false, error: 'No interface — set Interface/Port column or select scInterface' };
-    const timeoutMs = Math.min(parseInt(row['Timeout'] || row['timeout'] || '3000') || 3000, 30000);
-    const minCount  = parseInt(row['Count'] || row['count'] || '1') || 1;
-    const matchStr  = (row['Match'] || row['match'] || '').toLowerCase();
+  // ── RxVerify — capture frames and verify count ───────────────────────────────
+  if (evType === 'rxverify') {
+    const captureIface   = row['CaptureInterface'] || row['captureInterface'] || row['Interface'] || '';
+    const captureFilter  = (row['CaptureFilter'] || row['captureFilter'] || row['Filter'] || '').toLowerCase();
+    const captureExpected = parseInt(row['CaptureExpected'] || row['captureExpected'] || '1') || 1;
+    const timeoutMs = parseInt(row['Timeout'] || row['timeout'] || '3000') || 3000;
     try {
-      await api('/api/capture/clear', { method: 'POST', body: '{}' }).catch(() => {});
-      await api('/api/capture/start', { method: 'POST', body: JSON.stringify({ interfaces: [captureIface] }) });
-      await new Promise(r => setTimeout(r, timeoutMs));
-      await api('/api/capture/stop', { method: 'POST', body: '{}' }).catch(() => {});
-      const cap = await api('/api/capture/packets?limit=500');
-      const pkts = cap.rows || [];
-      const matched = matchStr ? pkts.filter(r => JSON.stringify(r.decoded || {}).toLowerCase().includes(matchStr)) : pkts;
-      if (matched.length >= minCount) return { ok: true, detail: `${matched.length} pkts` };
-      return { ok: false, error: `Expected ≥${minCount}, got ${matched.length}` };
-    } catch(e) { return { ok: false, error: e.message }; }
+      await api('/api/capture/clear', { method: 'POST', body: '{}' });
+      const ifaces = captureIface ? [captureIface] : [];
+      await api('/api/capture/start', { method: 'POST', body: JSON.stringify({ interfaces: ifaces }) });
+
+      const deadline = Date.now() + timeoutMs;
+      let matched = 0;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 200));
+        const data = await api('/api/capture/packets?limit=1000');
+        const pkts = data.rows || [];
+        const hits = captureFilter
+          ? pkts.filter(r => (r.frameHex || '').toLowerCase().includes(captureFilter)
+              || JSON.stringify(r.decoded || {}).toLowerCase().includes(captureFilter))
+          : pkts;
+        matched = hits.length;
+        if (matched >= captureExpected) break;
+      }
+      await api('/api/capture/stop', { method: 'POST', body: '{}' });
+
+      return matched >= captureExpected
+        ? { ok: true,  detail: `${matched}/${captureExpected} frames captured` }
+        : { ok: false, error: `RxVerify: only ${matched}/${captureExpected} frames in ${timeoutMs}ms` };
+    } catch (e) { return { ok: false, error: `RxVerify error: ${e.message}` }; }
   }
 
-  // fdbwritebucket, fdbreadbucket, unknown → skip
+  // unknown event type
   await new Promise(r => setTimeout(r, 20));
-  return { ok: true, detail: 'Skipped' };
+  return { ok: false, error: `Unknown event type: ${evType}` };
 }
 
 // ── Row result updater (in-place, no full re-render) ─────────────────────────
@@ -3487,7 +3670,12 @@ async function tsReadClock() {
     const addend=parseRegD(dA),ctrl1=parseRegD(dC1),increment=ctrl1&0xFFFF;
     const scaled=increment+addend/4294967296.0,nsPerTick=scaled*1e9/4294967296.0,mhz=nsPerTick>0?Math.round(1000.0/nsPerTick*1e6)/1e6:0;
     if($('rv-ts-clk-mhz'))$('rv-ts-clk-mhz').value=mhz;
-    setRegStatus('rv-st-ts-clk',`INCREMENT=${increment}  ADDEND=0x${addend.toString(16).toUpperCase().padStart(8,'0')}`,true);
+    // PPS fields share the same 0x030 register — update them here to avoid a duplicate read
+    const src=(ctrl1>>16)&0x3,wid=((ctrl1>>>24)&0xFF)*2;
+    document.querySelectorAll('input[name="ts-pps-src"]').forEach(r=>{r.checked=parseInt(r.value)===(src>=2?2:src);});
+    if($('rv-ts-pps-width'))$('rv-ts-pps-width').value=wid;
+    const srcLabel=['Disable','Internal','GPS'][src]||'GPS';
+    setRegStatus('rv-st-ts-clk',`INCREMENT=${increment}  ADDEND=0x${addend.toString(16).toUpperCase().padStart(8,'0')}  PPS:${srcLabel}`,true);
   }catch(err){setRegStatus('rv-st-ts-clk',`Error: ${err.message}`,false);}
 }
 
@@ -3513,14 +3701,12 @@ async function tsApplyPps() {
   catch(err){setRegStatus('rv-st-ts-clk',`Error: ${err.message}`,false);}
 }
 
-async function tsAdjNs(inc) {
-  const ms=parseInt($('rv-ts-ns-adj')?.value||'0'),nsV=(Math.abs(ms)*1000000)>>>0,v=(nsV&0x3FFFFFFF)|(inc?0x40000000:0x80000000);
-  await rvWrite('0x034',`0x${v.toString(16).padStart(8,'0')}`,'rv-st-ts-adj');
-}
-
-async function tsAdjSec(inc) {
-  const s=parseInt($('rv-ts-sec-adj')?.value||'0'),v=(Math.abs(s)&0x3FFFFFFF)|(inc?0x40000000:0x80000000);
-  await rvWrite('0x038',`0x${v.toString(16).padStart(8,'0')}`,'rv-st-ts-adj');
+async function tsApplyAdj() {
+  const nsMs=parseInt($('rv-ts-ns-adj')?.value||'0'),secS=parseInt($('rv-ts-sec-adj')?.value||'0');
+  const nsV=((Math.abs(nsMs)*1000000)>>>0&0x3FFFFFFF)|(nsMs>=0?0x40000000:0x80000000);
+  const secV=(Math.abs(secS)&0x3FFFFFFF)|(secS>=0?0x40000000:0x80000000);
+  await rvWrite('0x034',`0x${(nsV>>>0).toString(16).padStart(8,'0')}`,'rv-st-ts-adj');
+  await rvWrite('0x038',`0x${(secV>>>0).toString(16).padStart(8,'0')}`,'rv-st-ts-adj');
 }
 
 // ── LED / CLOCK ───────────────────────────────────────────────────────────────
@@ -3535,8 +3721,8 @@ function initLedDots() {
 
 function ledModeChanged() {
   const mode=parseInt(document.querySelector('input[name="led-mode"]:checked')?.value??'1');
-  const fpgaDiv=$('rv-led-fpga-dots'),regDiv=$('rv-led-reg-chks'),cpuWarn=$('rv-led-cpu-warn'),applyReg=$('rv-led-apply-reg');
-  if(fpgaDiv)fpgaDiv.style.display=mode===1?'':'none';if(regDiv)regDiv.style.display=mode===3?'':'none';if(cpuWarn)cpuWarn.style.display=mode===0?'':'none';if(applyReg)applyReg.style.display=mode===3?'':'none';
+  const fpgaDiv=$('rv-led-fpga-dots'),regDiv=$('rv-led-reg-chks'),cpuWarn=$('rv-led-cpu-warn');
+  if(fpgaDiv)fpgaDiv.style.display=mode===1?'':'none';if(regDiv)regDiv.style.display=mode===3?'':'none';if(cpuWarn)cpuWarn.style.display=mode===0?'':'none';
 }
 
 async function ledRead() {
@@ -3545,17 +3731,11 @@ async function ledRead() {
   catch(err){setRegStatus('rv-st-led',`Error: ${err.message}`,false);}
 }
 
-async function ledApplyMode() {
+async function ledApply() {
   const mode=parseInt(document.querySelector('input[name="led-mode"]:checked')?.value??'1');
-  setRegStatus('rv-st-led','Setting...',true);
-  try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x060'})});let v=parseRegD(d)&~0x300;v|=(mode<<8);await api('/api/register/write',{method:'POST',body:JSON.stringify({offset:'0x060',value:`0x${v.toString(16).padStart(8,'0')}`})});ledModeChanged();setRegStatus('rv-st-led','LED mode set',true);}
-  catch(err){setRegStatus('rv-st-led',`Error: ${err.message}`,false);}
-}
-
-async function ledApplyReg() {
   let leds=0;for(let i=0;i<8;i++){if($(`rv-led-rb-${i}`)?.checked)leds|=(1<<i);}
   setRegStatus('rv-st-led','Setting...',true);
-  try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x060'})});let v=parseRegD(d)&~0xFF;v|=leds;await api('/api/register/write',{method:'POST',body:JSON.stringify({offset:'0x060',value:`0x${v.toString(16).padStart(8,'0')}`})});setRegStatus('rv-st-led','LED output set',true);}
+  try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x060'})});let v=parseRegD(d)&~0x3FF;v|=(mode<<8)|leds;await api('/api/register/write',{method:'POST',body:JSON.stringify({offset:'0x060',value:`0x${v.toString(16).padStart(8,'0')}`})});ledModeChanged();setRegStatus('rv-st-led','OK',true);}
   catch(err){setRegStatus('rv-st-led',`Error: ${err.message}`,false);}
 }
 
@@ -3569,8 +3749,15 @@ function clkMhzToLimit(mhz){return Math.round(mhz*1e6/2)>>>0;}
 
 async function clkRead() {
   setRegStatus('rv-st-clk-limit','Reading...',true);
-  try{const[d0,d1,dr]=await Promise.all([api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x068'})}),api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x06C'})}),api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x0D0'})})]);if($('rv-clk-sys'))$('rv-clk-sys').value=clkLimitToMhz(parseRegD(d0));if($('rv-clk-ahb'))$('rv-clk-ahb').value=clkLimitToMhz(parseRegD(d1));if($('rv-clk-rgmii'))$('rv-clk-rgmii').value=clkLimitToMhz(parseRegD(dr));setRegStatus('rv-st-clk-limit','OK',true);}
-  catch(err){setRegStatus('rv-st-clk-limit',`Error: ${err.message}`,false);}
+  try{
+    const d0=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x068'})});
+    const d1=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x06C'})});
+    const dr=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x0D0'})});
+    if($('rv-clk-sys'))$('rv-clk-sys').value=clkLimitToMhz(parseRegD(d0));
+    if($('rv-clk-ahb'))$('rv-clk-ahb').value=clkLimitToMhz(parseRegD(d1));
+    if($('rv-clk-rgmii'))$('rv-clk-rgmii').value=clkLimitToMhz(parseRegD(dr));
+    setRegStatus('rv-st-clk-limit','OK',true);
+  }catch(err){setRegStatus('rv-st-clk-limit',`Error: ${err.message}`,false);}
 }
 
 async function clkApply(offset,inputId){const mhz=parseFloat($(inputId)?.value||'0');await rvWrite(offset,`0x${clkMhzToLimit(mhz).toString(16).padStart(8,'0')}`,'rv-st-clk-limit');}
@@ -3640,46 +3827,42 @@ function initRegViewer() {
     try{if(rw==='read'){await rvRead(offset,valId,stId);}else{const val=valId&&$(valId)?$(valId).value:'0x00000000';await rvWrite(offset,val,stId);}}catch{/* status already set */}
   });
 
-  $('rv-ver-read')?.addEventListener('click',async()=>{try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x000'})});const v=parseInt(d.value||`0x${(d.valueDec||0).toString(16)}`,16)>>>0;if($('rv-ver-str'))$('rv-ver-str').value=parseSysCtrlVersion(v);setRegStatus('rv-st-version','OK',true);}catch(err){setRegStatus('rv-st-version',`Error: ${err.message}`,false);}});
+  const sysctlReadVersion=async()=>{try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x000'})});const v=parseInt(d.value||`0x${(d.valueDec||0).toString(16)}`,16)>>>0;if($('rv-ver-str'))$('rv-ver-str').value=parseSysCtrlVersion(v);setRegStatus('rv-st-version','OK',true);}catch(err){setRegStatus('rv-st-version',`Error: ${err.message}`,false);}};
+  const sysctlReadEnable=async()=>{try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x008'})});syncSysCtrlEnable(parseInt(d.value||`0x${(d.valueDec||0).toString(16)}`,16)>>>0);setRegStatus('rv-st-enable','OK',true);}catch(err){setRegStatus('rv-st-enable',`Error: ${err.message}`,false);}};
+  const sysctlReadHostIf=async()=>{try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x00C'})});syncHostIf(parseInt(d.value||`0x${(d.valueDec||0).toString(16)}`,16)>>>0);setRegStatus('rv-st-ahb','OK',true);}catch(err){setRegStatus('rv-st-ahb',`Error: ${err.message}`,false);}};
   $('rv-ver-default')?.addEventListener('click',async()=>{await rvWrite('0x004','0x00000001','rv-st-version');});
-  $('rv-en-read')?.addEventListener('click',async()=>{try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x008'})});syncSysCtrlEnable(parseInt(d.value||`0x${(d.valueDec||0).toString(16)}`,16)>>>0);setRegStatus('rv-st-enable','OK',true);}catch(err){setRegStatus('rv-st-enable',`Error: ${err.message}`,false);}});
   $('rv-en-apply')?.addEventListener('click',async()=>{await rvWrite('0x008',`0x${buildSysCtrlEnable().toString(16).toUpperCase().padStart(8,'0')}`,'rv-st-enable');});
-  $('rv-ahb-read')?.addEventListener('click',async()=>{try{const d=await api('/api/register/read',{method:'POST',body:JSON.stringify({offset:'0x00C'})});syncHostIf(parseInt(d.value||`0x${(d.valueDec||0).toString(16)}`,16)>>>0);setRegStatus('rv-st-ahb','OK',true);}catch(err){setRegStatus('rv-st-ahb',`Error: ${err.message}`,false);}});
   $('rv-ahb-apply')?.addEventListener('click',async()=>{await rvWrite('0x00C',`0x${buildHostIf().toString(16).toUpperCase().padStart(8,'0')}`,'rv-st-ahb');});
-  $('sysctlReadAll')?.addEventListener('click',()=>{$('rv-ver-read')?.click();$('rv-en-read')?.click();$('rv-ahb-read')?.click();});
+  $('sysctlReadAll')?.addEventListener('click',async()=>{await sysctlReadVersion();await sysctlReadEnable();await sysctlReadHostIf();});
 
   initIntrDots();
-  $('interruptReadAll')?.addEventListener('click',()=>Promise.allSettled([intrCtrlRead(),intrRawRead(),intrMaskRead()]));
-  $('rv-intr-ctrl-read')?.addEventListener('click',intrCtrlRead);$('rv-intr-ctrl-apply')?.addEventListener('click',intrCtrlApply);
-  $('rv-intr-raw-read')?.addEventListener('click',intrRawRead);$('rv-intr-raw-poll')?.addEventListener('click',intrTogglePoll);
-  $('rv-intr-mask-read')?.addEventListener('click',intrMaskRead);$('rv-intr-mask-apply')?.addEventListener('click',intrMaskApply);
+  $('interruptReadAll')?.addEventListener('click',async()=>{await intrCtrlRead();await intrRawRead();await intrMaskRead();});
+  $('rv-intr-ctrl-apply')?.addEventListener('click',intrCtrlApply);
+  $('rv-intr-raw-poll')?.addEventListener('click',intrTogglePoll);
+  $('rv-intr-mask-apply')?.addEventListener('click',intrMaskApply);
   $('rv-intr-sw-trigger')?.addEventListener('click',intrSwTrigger);
 
-  $('timestampReadAll')?.addEventListener('click',()=>Promise.allSettled([tsReadTime(),tsReadClock(),tsReadPps()]));
-  $('rv-ts-read-time')?.addEventListener('click',tsReadTime);$('rv-ts-now')?.addEventListener('click',tsSetNow);$('rv-ts-set-time')?.addEventListener('click',tsSetTime);
-  $('rv-ts-read-clock')?.addEventListener('click',tsReadClock);$('rv-ts-apply-clock')?.addEventListener('click',tsApplyClock);
-  $('rv-ts-read-pps')?.addEventListener('click',tsReadPps);$('rv-ts-apply-pps')?.addEventListener('click',tsApplyPps);
-  $('rv-ts-ns-inc')?.addEventListener('click',()=>tsAdjNs(true));$('rv-ts-ns-dec')?.addEventListener('click',()=>tsAdjNs(false));
-  $('rv-ts-sec-inc')?.addEventListener('click',()=>tsAdjSec(true));$('rv-ts-sec-dec')?.addEventListener('click',()=>tsAdjSec(false));
+  $('timestampReadAll')?.addEventListener('click',async()=>{await tsReadTime();await tsReadClock();});
+  $('rv-ts-now')?.addEventListener('click',tsSetNow);$('rv-ts-set-time')?.addEventListener('click',tsSetTime);
+  $('rv-ts-apply-all')?.addEventListener('click',async()=>{await tsApplyClock();await tsApplyPps();});
+  $('rv-ts-apply-adj')?.addEventListener('click',tsApplyAdj);
 
   initLedDots();
   document.querySelectorAll('input[name="led-mode"]').forEach(r=>r.addEventListener('change',ledModeChanged));
-  $('ledclockReadAll')?.addEventListener('click',()=>Promise.allSettled([ledRead(),extSwRead(),clkRead()]));
-  $('rv-led-read')?.addEventListener('click',ledRead);$('rv-led-apply-mode')?.addEventListener('click',ledApplyMode);$('rv-led-apply-reg')?.addEventListener('click',ledApplyReg);
-  $('rv-ext-sw-read')?.addEventListener('click',extSwRead);$('rv-clk-read')?.addEventListener('click',clkRead);
-  $('rv-clk-sys-apply')?.addEventListener('click',()=>clkApply('0x068','rv-clk-sys'));$('rv-clk-ahb-apply')?.addEventListener('click',()=>clkApply('0x06C','rv-clk-ahb'));$('rv-clk-rgmii-apply')?.addEventListener('click',()=>clkApply('0x0D0','rv-clk-rgmii'));
-  $('rv-clk-apply-all')?.addEventListener('click',()=>Promise.allSettled([clkApply('0x068','rv-clk-sys'),clkApply('0x06C','rv-clk-ahb'),clkApply('0x0D0','rv-clk-rgmii')]));
+  $('ledclockReadAll')?.addEventListener('click',async()=>{await ledRead();await extSwRead();await clkRead();});
+  $('rv-led-apply')?.addEventListener('click',ledApply);
+  $('rv-clk-apply-all')?.addEventListener('click',async()=>{await clkApply('0x068','rv-clk-sys');await clkApply('0x06C','rv-clk-ahb');await clkApply('0x0D0','rv-clk-rgmii');});
 
   const TD_OFFSETS=['0x040','0x044','0x048','0x04C','0x050','0x054','0x058','0x05C'];
-  $('testdataReadAll')?.addEventListener('click',()=>Promise.allSettled(TD_OFFSETS.map((off,i)=>rvRead(off,`rv-td-${i}`,`rv-st-td-${i}`))));
-  $('testdataWriteAll')?.addEventListener('click',()=>Promise.allSettled(TD_OFFSETS.map((off,i)=>rvWrite(off,$(`rv-td-${i}`)?.value||'0x00000000',`rv-st-td-${i}`))));
+  $('testdataReadAll')?.addEventListener('click',async()=>{for(let i=0;i<TD_OFFSETS.length;i++)await rvRead(TD_OFFSETS[i],`rv-td-${i}`,`rv-st-td-${i}`);});
+  $('testdataWriteAll')?.addEventListener('click',async()=>{for(let i=0;i<TD_OFFSETS.length;i++)await rvWrite(TD_OFFSETS[i],$(`rv-td-${i}`)?.value||'0x00000000',`rv-st-td-${i}`);});
 
   $('rv-count-read')?.addEventListener('click',countRead);
   $('rv-count-clear')?.addEventListener('click',()=>{const tbody=$('rv-count-tbody');if(tbody)tbody.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);">No data</td></tr>';setRegStatus('rv-st-count','',true);});
 
   $('rv-mdio-port')?.addEventListener('change',mdioPortChanged);$('rv-mdio-calc')?.addEventListener('click',mdioCalcMdc);$('rv-mdio-apply')?.addEventListener('click',mdioApplySetup);$('rv-mdio-read-phy')?.addEventListener('click',mdioReadPhy);$('rv-mdio-write-phy')?.addEventListener('click',mdioWritePhy);$('rv-mdio-read-link')?.addEventListener('click',mdioReadAllLink);
 
-  $('rv-fdb-port-mac')?.addEventListener('change',e=>{const val=e.target.value;if(!val)return;const[portIdx,mac]=val.split('|');if($('rv-fdb-mac'))$('rv-fdb-mac').value=mac;if($('rv-fdb-port'))$('rv-fdb-port').value=portIdx;});
+  $('rv-fdb-port-mac')?.addEventListener('change',e=>{const val=e.target.value.trim();if(val&&$('rv-fdb-mac'))$('rv-fdb-mac').value=val;});
   $('rv-fdb-read-config')?.addEventListener('click',fdbCtrlReadConfig);$('fdbReadConfig')?.addEventListener('click',fdbCtrlReadConfig);
   $('rv-fdb-apply-en')?.addEventListener('click',fdbCtrlApplyEnable);$('rv-fdb-load-default')?.addEventListener('click',fdbCtrlLoadDefault);
   $('rv-fdb-rdhash')?.addEventListener('click',fdbReadByHash);$('rv-fdb-rdbucket')?.addEventListener('click',fdbReadByBucket);
@@ -3742,9 +3925,8 @@ function updateSerialUI(connected, statusText) {
   updateStatusBar();
   const led=$('serialLed'),st=$('serialState');
   if(led)led.classList.toggle('connected',connected);
-  const connectBtn=$('serialConnect'),disconnectBtn=$('serialDisconnect');
-  if(connectBtn){connectBtn.disabled=connected;connectBtn.style.opacity=connected?'.5':'1';}
-  if(disconnectBtn){disconnectBtn.disabled=!connected;disconnectBtn.style.opacity=connected?'1':'.5';}
+  const toggleBtn=$('serialToggle');
+  if(toggleBtn){toggleBtn.textContent=connected?'Disconnect':'Connect';toggleBtn.className=connected?'small danger':'primary small';}
   if(st&&statusText!==undefined)st.textContent=statusText;
   const brk=$('serialBrk');if(brk)brk.disabled=!connected;
 }
@@ -3759,16 +3941,37 @@ function appendHyperTerm(text) {
 }
 
 let _ttyStreamCtrl=null;
-function isTtyStreamActive() { return _ttyStreamCtrl !== null; }
+let _ttyStreamSession='';
+let _hyperTermLineBuffer='';
+// Device-echo suppression: { cmd: count } — suppress one echo per outstanding command
+const _echoSuppress=new Map();
+function suppressEchoOnce(cmd){_echoSuppress.set(cmd,(_echoSuppress.get(cmd)||0)+1);setTimeout(()=>{const c=(_echoSuppress.get(cmd)||0)-1;if(c<=0)_echoSuppress.delete(cmd);else _echoSuppress.set(cmd,c);},2000);}
+function checkSuppressEcho(line){const c=_echoSuppress.get(line)||0;if(c>0){if(c===1)_echoSuppress.delete(line);else _echoSuppress.set(line,c-1);return true;}return false;}
+
 function startTtyStream(session) {
   if(_ttyStreamCtrl)_ttyStreamCtrl.abort();
   _ttyStreamCtrl=new AbortController();
+  _ttyStreamSession=session||'';
+  _hyperTermLineBuffer='';
   const url=`/api/tty/stream${session?`?session=${encodeURIComponent(session)}`:''}`;
-  let buf='';
   fetch(url,{signal:_ttyStreamCtrl.signal}).then(r=>{
     const reader=r.body.getReader(),decoder=new TextDecoder();
-    function read(){reader.read().then(({done,value})=>{if(done)return;buf+=decoder.decode(value,{stream:true});const parts=buf.split('\n');buf=parts.pop()??'';for(const part of parts){const s=part.trim();if(!s)continue;try{const msg=JSON.parse(s);if(msg.type==='rx'&&msg.hex){const bytes=Uint8Array.from(msg.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));}else if(msg.type==='closed'){updateSerialUI(false,'disconnected');stopTtyStream();}else if(msg.type==='error'){appendHyperTerm(`[ERR] ${msg.message}`);}}catch{/*ignore*/}}read();}).catch(()=>{});}read();}).catch(()=>{});
+    let buf='';
+    function read(){reader.read().then(({done,value})=>{
+      if(done){if(_ttyStreamCtrl&&!_ttyStreamCtrl.signal.aborted)setTimeout(()=>startTtyStream(_ttyStreamSession),3000);return;}
+      buf+=decoder.decode(value,{stream:true});
+      const parts=buf.split('\n');buf=parts.pop()??'';
+      for(const part of parts){const s=part.trim();if(!s)continue;try{const msg=JSON.parse(s);
+        if(msg.type==='rx'&&msg.hex){const bytes=Uint8Array.from(msg.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);_hyperTermLineBuffer+=text;const lines=_hyperTermLineBuffer.split(/\r?\n/);_hyperTermLineBuffer=lines.pop()??'';lines.filter(l=>l.trim()).forEach(l=>{const s=l.replace(/^CMD>\s*/,'');if(!s.trim())return;if(!checkSuppressEcho(s.trim()))appendHyperTerm(s);});}
+        else if(msg.type==='closed'){updateSerialUI(false,'disconnected');stopTtyStream();}
+        else if(msg.type==='error'){appendHyperTerm(`[ERR] ${msg.message}`);}
+      }catch{/*ignore*/}}
+      read();
+    }).catch(e=>{if(e?.name!=='AbortError'&&_ttyStreamCtrl&&!_ttyStreamCtrl.signal.aborted)setTimeout(()=>startTtyStream(_ttyStreamSession),3000);});}
+    read();
+  }).catch(e=>{if(e?.name!=='AbortError'&&_ttyStreamCtrl)setTimeout(()=>startTtyStream(_ttyStreamSession),3000);});
 }
+
 function stopTtyStream() { if(_ttyStreamCtrl){_ttyStreamCtrl.abort();_ttyStreamCtrl=null;} }
 
 async function refreshSerialStatus() {
@@ -3793,6 +3996,7 @@ async function refreshSerialStatus() {
     const connected=!!(data.open||data.connected||t.isConnected);
     const statusTxt=t.connectionStatus||(connected?`connected (${data.session||''})`:' disconnected');
     updateSerialUI(connected,statusTxt);
+    if(connected&&!_ttyStreamCtrl)startTtyStream(data.session||data.sessionId||'');
     const out=$('serialOutput');
     if(out&&t.terminalOutput!==undefined){out.textContent=t.terminalOutput||'No terminal output.';out.scrollTop=out.scrollHeight;}
   } catch { updateSerialUI(false,'offline'); }
@@ -3818,138 +4022,6 @@ async function sendSerial() {
   catch(err){toast(`Send failed: ${err.message}`,'bad');}
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
-async function refreshSettings() {
-  try {
-    const [hr, rr] = await Promise.allSettled([api('/api/backend/status'), api('/api/register/status')]);
-    const h = hr.status==='fulfilled' ? hr.value : {};
-    const nn = h.nodeNative || {};
-    const capOk = nn.cap, tdOk = nn.tcpdump;
-    const packetSt = capOk ? '● cap npm  (send+capture)' : tdOk ? '● tcpdump  (capture only)' : '○ none  (install Npcap)';
-    const platform = (h.platform?.platform||h.platform||'');
-    const platformLabel = platform==='win32' ? 'Windows (Npcap)' : platform==='linux' ? 'Linux (libpcap)' : platform||'—';
-    if($('settingsPlatform'))$('settingsPlatform').textContent = platformLabel;
-    if($('settingsPackets'))$('settingsPackets').textContent  = packetSt;
-    if($('settingsSerial'))$('settingsSerial').textContent    = nn.serial ? `● available${nn.serialOpen?' (open)':''}` : '○ not available';
-    if($('settingsVersion'))$('settingsVersion').textContent  = '2.0.0';
-    const r = rr.status==='fulfilled' ? rr.value : {};
-    if($('settingsWorkerState'))$('settingsWorkerState').textContent = `${r.serialConnected?'● serial':'○ serial'}  base: ${r.baseAddress||'—'}`;
-    if($('settingsBaseAddr') && r.baseAddress) $('settingsBaseAddr').value = r.baseAddress;
-    const dot = $('serverState'); if(dot) dot.classList.toggle('connected', !!h.ok);
-    if($('status')) $('status').textContent = h.ok ? 'Connected' : 'Offline';
-  } catch { if($('status'))$('status').textContent='Offline'; }
-}
-
-// ── Port Map ──────────────────────────────────────────────────────────────────
-let _portmap = [];
-
-async function loadPortmap() {
-  try {
-    const data = await api('/api/portmap');
-    _portmap = data.ports || [];
-    renderPortmapTable();
-  } catch { /* offline */ }
-}
-
-function renderPortmapTable() {
-  const tbody = $('portmapRows'); if (!tbody) return;
-  if (!_portmap.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No ports defined.</td></tr>'; return; }
-  tbody.innerHTML = _portmap.map((p, i) => {
-    const nicOpts = state.interfaces.map(ni => `<option value="${esc(ni.name)}"${ni.name===p.nic?' selected':''}>${esc(ni.name)}</option>`).join('');
-    // Show saved NIC as option even if not present on this machine's interface list
-    const savedOpt = (p.nic && !state.interfaces.find(ni => ni.name === p.nic))
-      ? `<option value="${esc(p.nic)}" selected>${esc(p.nic)}</option>` : '';
-    return `<tr>
-      <td style="text-align:center;">${p.portId}</td>
-      <td><select class="pm-nic" data-idx="${i}" style="width:100%;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:2px 4px;font-size:11px;">
-        <option value="">-- NIC --</option>${savedOpt}${nicOpts}
-      </select></td>
-      <td><input class="pm-desc" data-idx="${i}" value="${esc(p.description||'')}" placeholder="e.g. SW Port ${p.portId} → ETH" style="width:100%;background:var(--surf);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:2px 5px;font-size:11px;"></td>
-      <td style="text-align:center;"><button class="small danger pm-del" data-idx="${i}" title="Remove">✕</button></td>
-    </tr>`;
-  }).join('');
-  tbody.querySelectorAll('.pm-nic').forEach(sel => sel.addEventListener('change', e => { _portmap[Number(e.target.dataset.idx)].nic = e.target.value; }));
-  tbody.querySelectorAll('.pm-desc').forEach(inp => inp.addEventListener('input', e => { _portmap[Number(e.target.dataset.idx)].description = e.target.value; }));
-  tbody.querySelectorAll('.pm-del').forEach(btn => btn.addEventListener('click', e => { _portmap.splice(Number(e.target.dataset.idx), 1); renderPortmapTable(); }));
-  renderMacroPortSel();
-}
-
-async function savePortmap() {
-  const st = $('portmapSt');
-  try {
-    await api('/api/portmap', { method: 'POST', body: JSON.stringify({ ports: _portmap }) });
-    if (st) { st.textContent = 'Saved ✓'; setTimeout(() => { if (st) st.textContent = ''; }, 2000); }
-  } catch (err) { if (st) st.textContent = `Error: ${err.message}`; }
-}
-
-function renderMacroPortSel() {
-  const wrap = $('macroPortSel'); if (!wrap) return;
-  const mapped = _portmap.filter(p => p.nic);
-  if (!mapped.length) { wrap.innerHTML = '<span style="color:var(--muted);font-size:11px;">No NIC mapped. Define port mapping above first.</span>'; return; }
-  wrap.innerHTML = mapped.map(p => `
-    <label class="check-inline" style="font-size:11px;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;">
-      <input type="checkbox" class="macro-port-chk" data-port="${p.portId}" checked>
-      Port ${p.portId} <span style="color:var(--muted);">${esc(p.nic)}</span>
-    </label>`).join('');
-}
-
-async function runMacro() {
-  const btn = $('macroRun'), spin = $('macroSpinner');
-  const count = parseInt($('macroCount')?.value || '10');
-  const intervalMs = parseInt($('macroInterval')?.value || '10');
-  const selected = [...document.querySelectorAll('.macro-port-chk:checked')].map(c => Number(c.dataset.port));
-  if (!selected.length) { toast('테스트할 포트를 선택하세요', 'bad'); return; }
-
-  const mapped = selected.map(pid => _portmap.find(p => p.portId === pid)).filter(Boolean);
-  if (mapped.length < 2) { toast('최소 2개 포트가 필요합니다 (src + dst)', 'bad'); return; }
-
-  if (btn) btn.disabled = true;
-  if (spin) spin.style.display = '';
-  const tbody = $('macroResultRows');
-  if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);">Running…</td></tr>';
-
-  const results = [];
-  const base = `http://localhost:${location.port || 8080}`;
-
-  try {
-    for (let si = 0; si < mapped.length; si++) {
-      const dst = mapped[(si + 1) % mapped.length];
-      const src = mapped[si];
-      try {
-        const r = await api('/api/simple-bidir-forward-test', {
-          method: 'POST',
-          body: JSON.stringify({
-            nodeAUrl: base, nodeBUrl: base,
-            nodeAPrimaryInterface: src.nic,
-            nodeBPrimaryInterface: dst.nic,
-            count, intervalMs, direction: 'A_TO_B'
-          })
-        });
-        const d = r.directions?.[0] || {};
-        results.push({ srcPort: src.portId, srcNic: src.nic, dstPort: dst.portId, dstNic: dst.nic,
-                        sent: d.sent || count, matched: d.matched || 0, result: d.result || 'FAIL' });
-      } catch (e) {
-        results.push({ srcPort: src.portId, srcNic: src.nic, dstPort: dst.portId, dstNic: dst.nic,
-                        sent: count, matched: 0, result: 'ERROR', error: e.message });
-      }
-    }
-    if (tbody) {
-      tbody.innerHTML = results.map(r => `<tr>
-        <td style="text-align:center;">${r.srcPort}</td>
-        <td style="font-size:10px;">${esc(r.srcNic)}</td>
-        <td style="text-align:center;">${r.dstPort}</td>
-        <td style="font-size:10px;">${esc(r.dstNic)}</td>
-        <td style="text-align:center;">${r.sent}</td>
-        <td style="text-align:center;">${r.matched}</td>
-        <td style="text-align:center;font-weight:600;color:${r.result==='PASS'?'#44FF88':'var(--red)'};">${r.result}</td>
-      </tr>`).join('');
-    }
-  } finally {
-    if (btn) btn.disabled = false;
-    if (spin) spin.style.display = 'none';
-  }
-}
-
 // ── Logs ──────────────────────────────────────────────────────────────────────
 async function loadLogs() {
   try{
@@ -3971,16 +4043,7 @@ function updateStatusBar() {
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function initWebSocket() {
   const ws=new WebSocket(`ws://${location.host}`);
-  ws.onmessage=({data})=>{try{const msg=JSON.parse(data);if(msg.type==='workerEvent'){const p=msg.payload||{};
-    // Skip serial data from WebSocket when TTY stream is already delivering it (prevents double display)
-    if(!isTtyStreamActive()){
-      if(p.kind==='serial'&&p.rxType==='rx'&&p.hex){
-        const bytes=Uint8Array.from(p.hex.match(/.{1,2}/g)||[],b=>parseInt(b,16));
-        const text=new TextDecoder('utf-8',{fatal:false}).decode(bytes);
-        text.split(/\r?\n/).filter(l=>l.trim()).forEach(l=>appendHyperTerm(l));
-      }else if(p.type==='serialData'||p.type==='terminal'){appendHyperTerm(p.text||p.data||'');}
-    }
-  }}catch{/*ignore*/}};
+  ws.onmessage=({data})=>{try{const msg=JSON.parse(data);if(msg.type==='workerEvent'){const p=msg.payload||{};if(p.type==='serialData'||p.type==='terminal'){appendSeqTerm(p.text||p.data||'');}}}catch{/*ignore*/}};
   ws.onclose=()=>setTimeout(initWebSocket,3000);
 }
 
@@ -4032,7 +4095,11 @@ async function init() {
   document.querySelectorAll('.palette-item[data-event]').forEach(el => {
     el.addEventListener('click', () => showEventEditor(el.dataset.event));
   });
-  $('addToSequence')?.addEventListener('click', addEventFromEditor);
+  $('addToSequence')?.addEventListener('click', () => {
+    const btn = $('addToSequence');
+    if (btn?.dataset.editMode === 'update') updateRowFromEditor();
+    else addEventFromEditor();
+  });
 
   // Modal events (keep for compatibility)
   $('evModalOk')?.addEventListener('click', confirmEventModal);
@@ -4052,13 +4119,13 @@ async function init() {
 
   // HyperTerminal
   $('serialRefresh')?.addEventListener('click', refreshSerialStatus);
-  $('serialConnect')?.addEventListener('click', ()=>toggleSerial(true));
-  $('serialDisconnect')?.addEventListener('click', ()=>toggleSerial(false));
+  $('serialToggle')?.addEventListener('click', ()=>toggleSerial());
   $('serialSend')?.addEventListener('click', sendSerial);
   $('serialInput')?.addEventListener('keydown', e=>{if(e.key==='Enter')sendSerial();});
   $('serialClear')?.addEventListener('click', async ()=>{
     try{await api('/api/serial/clear',{method:'POST',body:'{}'});}catch{/*best effort*/}
     if($('serialOutput'))$('serialOutput').textContent='';
+    _hyperTermLineBuffer='';
   });
   $('serialBrk')?.addEventListener('click', async ()=>{
     try{await api('/api/serial/brk',{method:'POST',body:'{}'});toast('BRK signal sent','ok');}
@@ -4071,22 +4138,15 @@ async function init() {
 
   // Settings
   $('refreshLogs')?.addEventListener('click', loadLogs);
-  $('settingsRefresh')?.addEventListener('click', refreshSettings);
-  $('settingsBaseAddrApply')?.addEventListener('click', async () => {
-    const val = $('settingsBaseAddr')?.value?.trim(); if (!val) return;
-    try {
-      await api('/api/register/base-addr', { method: 'POST', body: JSON.stringify({ address: val }) });
-      if ($('settingsBaseAddrSt')) { $('settingsBaseAddrSt').textContent = 'Applied ✓'; setTimeout(() => { if ($('settingsBaseAddrSt')) $('settingsBaseAddrSt').textContent = ''; }, 2000); }
-      await refreshRegStatus();
-    } catch (err) { if ($('settingsBaseAddrSt')) $('settingsBaseAddrSt').textContent = `Error: ${err.message}`; }
+  $('settingsWorkerRefresh')?.addEventListener('click', async ()=>{
+    try{const data=await api('/api/register/status');const el=$('settingsWorkerState');if(el)el.textContent=`${data.serialConnected?'● connected':'○ disconnected'}  base: ${data.baseAddress||'—'}`;if($('settingsBaseAddr')&&data.baseAddress)$('settingsBaseAddr').value=data.baseAddress;}
+    catch(err){if($('settingsWorkerState'))$('settingsWorkerState').textContent=`offline: ${err.message}`;}
   });
-  $('portmapSave')?.addEventListener('click', savePortmap);
-  $('portmapAddRow')?.addEventListener('click', () => {
-    const nextId = _portmap.length ? Math.max(..._portmap.map(p => p.portId)) + 1 : 0;
-    _portmap.push({ portId: nextId, nic: '', description: '' });
-    renderPortmapTable();
+  $('settingsBaseAddrApply')?.addEventListener('click', async ()=>{
+    const val=$('settingsBaseAddr')?.value?.trim();if(!val)return;
+    try{await api('/api/register/base-addr',{method:'POST',body:JSON.stringify({address:val})});if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='Applied';setTimeout(()=>{if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent='';},2000);await refreshRegStatus();}
+    catch(err){if($('settingsBaseAddrSt'))$('settingsBaseAddrSt').textContent=`Error: ${err.message}`;}
   });
-  $('macroRun')?.addEventListener('click', runMacro);
 
   try {
     await api('/api/health');
@@ -4098,7 +4158,6 @@ async function init() {
       refreshRegStatus(),
       loadTestCases(),
       loadSequence(),
-      loadPortmap(),
     ]);
     startCapturePolling();
     // Serial polling every 1500ms when on HyperTerminal tab

@@ -111,12 +111,12 @@ router.post('/tty/control', async (req, res) => {
 router.post('/tty/close', async (req, res) => {
   try {
     const { sessionId, session } = req.body || {};
-    const s = sessionId || session;
     if (hasWorker(req)) {
-      const d = await req.app.locals.localCmd('serialClose', { session: s }, 5000);
+      const d = await req.app.locals.localCmd('serialClose', { session: sessionId || session }, 5000);
       return res.json({ ok: true, ...(d || {}) });
     }
-    await req.app.locals.serialBridge.close(s);
+    const sid = sessionId || session || req.app.locals.serialBridge.getSession();
+    if (sid) await req.app.locals.serialBridge.close(sid);
     res.json({ ok: true });
   } catch (e) { wErr(res, e); }
 });
@@ -155,7 +155,9 @@ router.post('/serial/disconnect', async (req, res) => {
       const d = await req.app.locals.localCmd('serialClose', {}, 5000);
       return res.json({ ok: true, ...(d || {}) });
     }
-    await req.app.locals.serialBridge.close(sessionId || session);
+    // Fall back to first open session when no specific session is requested
+    const sid = sessionId || session || req.app.locals.serialBridge.getSession();
+    if (sid) await req.app.locals.serialBridge.close(sid);
     res.json({ ok: true });
   } catch (e) { wErr(res, e); }
 });

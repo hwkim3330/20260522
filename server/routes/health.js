@@ -27,13 +27,10 @@ router.get('/backend/status', async (req, res) => {
   }
 
   const interfaces = packetBackend.listInterfaces();
-  const capOk        = Boolean(packetBackend.isAvailable?.());
-  const capLoadError = packetBackend.getCapLoadError?.() || '';
   const nodeNative = {
-    packetSend: capOk,
-    packetCapture: capOk || Boolean(packetBackend.isTcpdumpAvailable?.()),
-    cap: capOk,
-    capLoadError,
+    packetSend: Boolean(packetBackend.isAvailable?.()),
+    packetCapture: Boolean(packetBackend.isAvailable?.() || packetBackend.isTcpdumpAvailable?.()),
+    cap: Boolean(packetBackend.isAvailable?.()),
     tcpdump: Boolean(packetBackend.isTcpdumpAvailable?.()),
     serial: Boolean(serialBridge?.isAvailable?.()),
     serialOpen: Boolean(serialBridge?.getStatus?.().open),
@@ -64,11 +61,7 @@ router.get('/backend/status', async (req, res) => {
     nodeNative,
     features,
     notes: {
-      packetSend: nodeNative.packetSend
-        ? 'Node cap is available for raw Ethernet send.'
-        : capLoadError
-          ? `cap load error: ${capLoadError}  →  sudo apt install libpcap-dev build-essential && npm install cap`
-          : 'Raw Ethernet send needs cap optional dependency.',
+      packetSend: nodeNative.packetSend ? 'Node cap is available for raw Ethernet send.' : 'Raw Ethernet send needs cap optional dependency.',
       packetCapture: nodeNative.packetCapture ? 'Capture backend is available.' : 'Capture needs cap or tcpdump.',
       register: features.register ? 'Register/MDIO/FDB can run through active worker or open serial bridge.' : 'Open serial bridge or connect C# worker for switch registers.'
     },

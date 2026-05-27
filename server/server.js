@@ -1,13 +1,5 @@
 'use strict';
 
-// Windows: Npcap must be in PATH before cap.node loads its DLL
-if (process.platform === 'win32') {
-  const npcapDir = 'C:\\Windows\\System32\\Npcap';
-  if (!process.env.PATH.includes(npcapDir)) {
-    process.env.PATH = npcapDir + ';' + process.env.PATH;
-  }
-}
-
 // Prevent unhandled errors from killing the process
 process.on('uncaughtException',   (err) => console.error('[FATAL uncaughtException]', err));
 process.on('unhandledRejection',  (reason) => console.error('[FATAL unhandledRejection]', reason));
@@ -44,7 +36,6 @@ const reportsDir = path.join(__dirname, 'reports');
 
 app.locals.workerHub      = workerHub;
 app.locals.localWorkerId  = LOCAL_WORKER;
-app.locals.logsDir        = logsDir;
 app.locals.testsDir       = testsDir;
 app.locals.macrosDir      = macrosDir;
 app.locals.reportsDir     = reportsDir;
@@ -202,10 +193,10 @@ app.use('/api', require('./routes/tty'));
 app.use('/api', require('./routes/testcases'));
 app.use('/api', require('./routes/packetFlow'));
 app.use('/api', require('./routes/macro'));
-app.use('/api', require('./routes/portmap'));
 app.use('/api', require('./routes/logs'));
 app.use('/api', require('./routes/workers')(workerHub));
 app.use('/api', require('./routes/tests'));
+app.use('/api', require('./routes/portmap'));
 // ── proxy routes → EthernetPacketGenerator.exe (--local-api, port 18080) ─────
 app.use('/api', require('./routes/scenario'));
 app.use('/api', require('./routes/register'));

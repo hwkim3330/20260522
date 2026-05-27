@@ -4,7 +4,7 @@
 
 > Integrated Ethernet Packet Generation, Capture & Scenario Validation Platform
 
-**Windows + Linux 동시 지원** — Node.js 단독으로 모든 기능 동작 (C# 불필요)
+**Windows + Linux 동시 지원** — Node.js 단독으로 모든 기능 동작
 
 ---
 
@@ -163,22 +163,37 @@ sudo node server.js
 
 ---
 
+## 포트맵 설정
+
+`/api/portmap` — 스위치 포트 번호와 NIC 이름을 매핑합니다.  
+기본값 (타깃 보드 기준):
+
+| Port | NIC |
+|------|-----|
+| 0 | enxc84d442001a1 |
+| 1 | enxc84d44252d37 |
+| 2 | enxc84d44200135 |
+| 3 | enxc84d44350003 |
+| 4 | enx00e04c681336 |
+| 5 | enxc84d4423f731 |
+
+---
+
 ## API 요약
 
 Base URL: `http://localhost:8080/api`
 
 | Method | Endpoint | 설명 |
 |--------|----------|------|
-| GET | `/health` | 서버 상태 (cap 여부, 시리얼 여부) |
-| GET | `/version` | 버전 정보 |
-| GET | `/local-addresses` | 로컬 IP 목록 |
+| GET | `/health` | 서버 상태 |
+| GET | `/backend/status` | cap/tcpdump/serial 가용성 + cap 에러 진단 |
+| GET | `/interfaces` | 네트워크 인터페이스 목록 |
 | POST | `/build` | 패킷 빌드 (전송 없이 프레임 생성) |
 | POST | `/send` | 패킷 전송 |
 | POST | `/capture/start` | 캡처 시작 |
 | POST | `/capture/stop` | 캡처 중지 |
 | GET | `/capture/packets` | 캡처된 패킷 목록 |
 | POST | `/capture/clear` | 캡처 버퍼 초기화 |
-| GET | `/capture/status` | 캡처 상태 및 인터페이스 목록 |
 | GET | `/tty/list` | 시리얼 포트 목록 |
 | POST | `/tty/open` | 시리얼 세션 열기 |
 | POST | `/tty/write` | 시리얼 데이터 전송 |
@@ -186,7 +201,6 @@ Base URL: `http://localhost:8080/api`
 | GET | `/tty/stream` | 시리얼 수신 NDJSON 스트림 |
 | POST | `/register/read` | 레지스터 읽기 |
 | POST | `/register/write` | 레지스터 쓰기 |
-| GET | `/register/status` | 레지스터 서비스 상태 |
 | POST | `/fdb/read` | FDB 테이블 읽기 |
 | POST | `/fdb/write` | FDB 항목 추가 |
 | POST | `/fdb/flush` | FDB 초기화 |
@@ -196,11 +210,10 @@ Base URL: `http://localhost:8080/api`
 | GET | `/counter/read` | 포트 카운터 읽기 |
 | GET | `/testcases/status` | 테스트 케이스 목록 |
 | POST | `/testcases/import-all-csv` | CSV 시나리오 전체 임포트 |
-| GET | `/sequence/status` | 시퀀스 목록 |
+| GET | `/sequence/full` | 시퀀스 전체 목록 |
 | POST | `/sequence/run` | 현재 시퀀스 실행 |
-| GET | `/auto/status` | 자동화 테스트 상태 |
-| POST | `/auto/run` | 자동화 테스트 실행 |
-| POST | `/remote-capture/probe` | 원격 노드 연결 확인 |
+| GET | `/portmap` | 포트↔NIC 매핑 조회 |
+| POST | `/portmap` | 포트↔NIC 매핑 저장 |
 
 ---
 
@@ -209,18 +222,14 @@ Base URL: `http://localhost:8080/api`
 ```
 20260522/
 ├── server/
-│   ├── server.js              # 진입점 — Npcap PATH, WebSocket, 라우트 등록
+│   ├── server.js              # 진입점 — WebSocket, 라우트 등록
 │   ├── package.json
 │   ├── routes/
-│   │   ├── health.js          # 서버 상태
+│   │   ├── health.js          # 서버 상태 + cap 진단
 │   │   ├── packet.js          # 패킷 빌드·전송
 │   │   ├── capture.js         # 패킷 캡처
 │   │   ├── tty.js             # 시리얼 포트
-│   │   ├── register.js        # 레지스터 R/W
-│   │   ├── fdb.js             # FDB 관리
-│   │   ├── mdio.js            # MDIO/PHY
-│   │   ├── counter.js         # 포트 카운터
-│   │   ├── timestamp.js       # PTP 타임스탬프
+│   │   ├── portmap.js         # 포트↔NIC 매핑
 │   │   ├── scenario.js        # 시나리오·시퀀스·테스트케이스
 │   │   ├── auto.js            # 자동화 테스트 러너
 │   │   ├── remoteCapture.js   # 원격 노드 프록시
@@ -231,6 +240,7 @@ Base URL: `http://localhost:8080/api`
 │   │   ├── serialBridge.js    # 시리얼 관리
 │   │   ├── switchProtocol.js  # 레지스터·FDB 프로토콜
 │   │   ├── frameBuilder.js    # 이더넷 프레임 빌더
+│   │   ├── httpUtil.js        # Node 16 호환 fetch/timeout polyfill
 │   │   └── autoEngine.js      # 자동화 테스트 엔진
 │   ├── public/
 │   │   ├── index.html
@@ -240,7 +250,6 @@ Base URL: `http://localhost:8080/api`
 │   └── logs/                  # 실행 로그·테스트 결과
 ├── docs/
 ├── start.bat                  # Windows 실행 스크립트 (관리자 권한)
-├── .gitignore
 └── README.md
 ```
 
@@ -256,8 +265,6 @@ PC-B: node server.js  →  http://192.168.1.20:8080
 
 브라우저(PC-A): Scenario Lab → Node B URL = http://192.168.1.20:8080
 ```
-
-자세한 내용: [`WORKER.md`](WORKER.md)
 
 ---
 

@@ -1,8 +1,8 @@
 'use strict';
+const { timeoutSignal, httpFetch } = require('../services/httpUtil');
 const { Router } = require('express');
 const path = require('path');
 const fs   = require('fs');
-const { timeoutSignal, httpFetch } = require('../services/httpUtil');
 
 const router = Router();
 

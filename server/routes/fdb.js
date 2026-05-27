@@ -7,8 +7,8 @@ function wErr(res, e) { res.status(e.workerError ? 502 : 503).json({ ok: false, 
 // POST /api/fdb/read   body: { mac, vlanId? }
 router.post('/fdb/read', async (req, res) => {
   try {
-    const r = await req.app.locals.switchProtocol.fdbRead(req.body || {});
-    res.json({ ok: true, ...r });
+    const entry = await req.app.locals.switchProtocol.fdbRead(req.body || {});
+    res.json({ ok: true, entry });
   } catch (e) { wErr(res, e); }
 });
 
@@ -33,6 +33,14 @@ router.post('/fdb/flush', async (req, res) => {
   try {
     const r = await req.app.locals.switchProtocol.fdbFlush(req.body || {});
     res.json({ ok: true, ...r });
+  } catch (e) { wErr(res, e); }
+});
+
+// POST /api/fdb/read-bucket  body: { bucket, slot? }
+router.post('/fdb/read-bucket', async (req, res) => {
+  try {
+    const entry = await req.app.locals.switchProtocol.fdbReadBucket(req.body || {});
+    res.json({ ok: true, entry });
   } catch (e) { wErr(res, e); }
 });
 
