@@ -14,7 +14,13 @@ const { spawn }      = require('child_process');
 const { buildFrame } = require('./frameBuilder');
 
 let Cap;
-try { Cap = require('cap').Cap; } catch {}
+let _capLoadError = '';
+try {
+  Cap = require('cap').Cap;
+} catch (e) {
+  _capLoadError = e.message || String(e);
+  console.warn('[packetBackend] cap load failed:', _capLoadError);
+}
 
 // ── Device resolution ──────────────────────────────────────────────────────────
 
@@ -332,6 +338,7 @@ async function sendPackets(profile) {
 
 function isAvailable()        { return !!Cap; }
 function isTcpdumpAvailable() { return hasTcpdump(); }
+function getCapLoadError()    { return _capLoadError; }
 
 // Send a raw hex frame (used by nativeWorker sendhex command)
 async function sendRaw(ifaceName, hex, count = 1) {
@@ -497,5 +504,5 @@ module.exports = {
   getCaptureDeviceNames, clearCapture, getCaptures, getCaptureStatus,
   addStreamCallback, removeStreamCallback,
   listInterfaces, resolveDevice, isAvailable, isTcpdumpAvailable, decodeFrame,
-  getLastCaptureError,
+  getLastCaptureError, getCapLoadError,
 };
