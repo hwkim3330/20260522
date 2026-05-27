@@ -1,5 +1,13 @@
 'use strict';
 
+// Windows: Npcap must be in PATH before cap.node loads its DLL
+if (process.platform === 'win32') {
+  const npcapDir = 'C:\\Windows\\System32\\Npcap';
+  if (!process.env.PATH.includes(npcapDir)) {
+    process.env.PATH = npcapDir + ';' + process.env.PATH;
+  }
+}
+
 // Prevent unhandled errors from killing the process
 process.on('uncaughtException',   (err) => console.error('[FATAL uncaughtException]', err));
 process.on('unhandledRejection',  (reason) => console.error('[FATAL unhandledRejection]', reason));
