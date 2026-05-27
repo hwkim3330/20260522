@@ -2,18 +2,19 @@
 const { Router } = require('express');
 const path = require('path');
 const fs   = require('fs');
+const { timeoutSignal, httpFetch } = require('../services/httpUtil');
 
 const router = Router();
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 const POST = (url, body, timeout = 30000) =>
-  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify(body), signal: AbortSignal.timeout(timeout) })
+  httpFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify(body), signal: timeoutSignal(timeout) })
     .then(r => r.json()).catch(() => ({}));
 
 const GET = (url, timeout = 15000) =>
-  fetch(url, { signal: AbortSignal.timeout(timeout) })
+  httpFetch(url, { signal: timeoutSignal(timeout) })
     .then(r => r.json()).catch(() => ({}));
 
 function marker(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }

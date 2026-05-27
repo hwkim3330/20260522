@@ -1,12 +1,7 @@
 'use strict';
 const { Router } = require('express');
+const { timeoutSignal, httpFetch: nodeFetch } = require('../services/httpUtil');
 const router = Router();
-
-// Node.js 18+ has global fetch built-in.
-// For older Node.js, fall back gracefully.
-const nodeFetch = typeof fetch === 'function'
-  ? fetch
-  : (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 
 function proxyErr(res, err, code = 502) {
   res.status(code).json({ ok: false, error: err.message });
@@ -27,7 +22,7 @@ router.post('/probe', async (req, res) => {
   try {
     const base = validatePeerUrl(req.body?.peerUrl);
     const resp = await nodeFetch(`${base}/api/interfaces`, {
-      signal: AbortSignal.timeout(6000)
+      signal: timeoutSignal(6000)
     });
     if (!resp.ok) throw new Error(`Peer returned HTTP ${resp.status}`);
     const data = await resp.json();
@@ -57,7 +52,7 @@ router.post('/start', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
-      signal: AbortSignal.timeout(6000)
+      signal: timeoutSignal(6000)
     }).catch(() => {});
 
     const bpfFilter = (req.body?.bpfFilter || '').trim();
@@ -65,7 +60,7 @@ router.post('/start', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ interfaces, ...(bpfFilter ? { bpfFilter } : {}) }),
-      signal: AbortSignal.timeout(12000)  // extra time for the 350ms stabilize wait
+      signal: timeoutSignal(12000)  // extra time for the 350ms stabilize wait
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok === false) {
@@ -85,7 +80,7 @@ router.post('/stop', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
-      signal: AbortSignal.timeout(6000)
+      signal: timeoutSignal(6000)
     });
     if (!resp.ok) throw new Error(`Peer returned HTTP ${resp.status}`);
     const data = await resp.json();
@@ -102,7 +97,7 @@ router.post('/clear', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
-      signal: AbortSignal.timeout(6000)
+      signal: timeoutSignal(6000)
     });
     if (!resp.ok) throw new Error(`Peer returned HTTP ${resp.status}`);
     const data = await resp.json();
@@ -120,7 +115,7 @@ router.get('/packets', async (req, res) => {
     // Pass offset/limit directly to peer; peer slices on its side
     const resp = await nodeFetch(
       `${base}/api/capture/packets?limit=${limit}&offset=${offset}`,
-      { signal: AbortSignal.timeout(8000) }
+      { signal: timeoutSignal(8000) }
     );
     if (!resp.ok) throw new Error(`Peer returned HTTP ${resp.status}`);
     const data = await resp.json();

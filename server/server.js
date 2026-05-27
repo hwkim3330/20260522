@@ -25,6 +25,7 @@ const switchProtocol = require('./services/switchProtocol');
 const packetBackend  = require('./services/packetBackend');
 const nativeWorker   = require('./services/nativeWorker');
 const autoEngine     = require('./services/autoEngine');
+const { timeoutSignal, httpFetch } = require('./services/httpUtil');
 
 const app  = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -143,23 +144,23 @@ app.post('/api/simple-bidir-forward-test', async (req, res) => {
 
     try {
       const hdr = { 'Content-Type': 'application/json' };
-      const to  = (ms) => ({ signal: AbortSignal.timeout(ms) });
+      const to  = (ms) => ({ signal: timeoutSignal(ms) });
 
       // Start capture on receiver
-      await fetch(`${receiverUrl}/api/capture/clear`, { method: 'POST', headers: hdr, body: '{}', ...to(8000) }).catch(() => {});
-      await fetch(`${receiverUrl}/api/capture/start`, { method: 'POST', headers: hdr, body: JSON.stringify({ interfaces: [recvIface] }), ...to(15000) }).catch(() => {});
+      await httpFetch(`${receiverUrl}/api/capture/clear`, { method: 'POST', headers: hdr, body: '{}', ...to(8000) }).catch(() => {});
+      await httpFetch(`${receiverUrl}/api/capture/start`, { method: 'POST', headers: hdr, body: JSON.stringify({ interfaces: [recvIface] }), ...to(15000) }).catch(() => {});
 
       // Send packets from sender
       const marker = `${payloadMarkerPrefix}_${dir}_${Date.now()}`;
       const sendBody = { interface: senderIface, protocol: 'udp', dstMac: 'FF:FF:FF:FF:FF:FF', srcIp: '169.254.1.1', dstIp: '169.254.1.2', srcPort: udpSrcPort, dstPort: udpDstPort, count, intervalMs, payload: { mode: 'text', data: marker } };
-      await fetch(`${senderUrl}/api/send`, { method: 'POST', headers: hdr, body: JSON.stringify(sendBody), ...to(30000) }).catch(() => {});
+      await httpFetch(`${senderUrl}/api/send`, { method: 'POST', headers: hdr, body: JSON.stringify(sendBody), ...to(30000) }).catch(() => {});
 
       // Wait for capture
       await new Promise(r => setTimeout(r, Math.min(captureTimeoutMs, 10000)));
 
       // Stop and collect capture
-      await fetch(`${receiverUrl}/api/capture/stop`, { method: 'POST', headers: hdr, body: '{}', ...to(8000) }).catch(() => {});
-      const capResp = await fetch(`${receiverUrl}/api/capture/packets?limit=1000`, { ...to(10000) }).catch(() => null);
+      await httpFetch(`${receiverUrl}/api/capture/stop`, { method: 'POST', headers: hdr, body: '{}', ...to(8000) }).catch(() => {});
+      const capResp = await httpFetch(`${receiverUrl}/api/capture/packets?limit=1000`, { ...to(10000) }).catch(() => null);
       const capData = capResp ? await capResp.json().catch(() => ({})) : {};
       const rows = capData.rows ?? [];
       const matched = rows.filter(r => r.decoded && JSON.stringify(r.decoded).includes(marker));

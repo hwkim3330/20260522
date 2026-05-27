@@ -1,5 +1,6 @@
 'use strict';
 const { Router } = require('express');
+const { timeoutSignal, httpFetch } = require('../services/httpUtil');
 const router = Router();
 
 function workerErr(res, err) {
@@ -85,7 +86,7 @@ router.post('/probe-node', async (req, res) => {
     const { url } = req.body || {};
     if (!url) return res.status(400).json({ ok: false, error: 'url required' });
     const base = url.replace(/\/$/, '');
-    const resp = await fetch(`${base}/api/interfaces`, { signal: AbortSignal.timeout(5000) });
+    const resp = await httpFetch(`${base}/api/interfaces`, { signal: timeoutSignal(5000) });
     const data = await resp.json();
     const ifaces = (data.interfaces ?? []).map(i => ({
       key:  i.key || i.name || '',
