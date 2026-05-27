@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { timeoutSignal, httpFetch } = require('../services/httpUtil');
 
 const local = process.env.LOCAL_URL || 'http://localhost:8080';
 const peer = process.env.PEER_URL || 'http://172.31.51.213:8080';
@@ -17,11 +18,11 @@ const directions = [
 ];
 
 async function req(method, url, body, timeout = 12000) {
-  const res = await fetch(url, {
+  const res = await httpFetch(url, {
     method,
     headers: { 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(timeout)
+    signal: timeoutSignal(timeout)
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };

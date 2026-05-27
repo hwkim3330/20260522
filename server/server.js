@@ -44,6 +44,7 @@ const reportsDir = path.join(__dirname, 'reports');
 
 app.locals.workerHub      = workerHub;
 app.locals.localWorkerId  = LOCAL_WORKER;
+app.locals.logsDir        = logsDir;
 app.locals.testsDir       = testsDir;
 app.locals.macrosDir      = macrosDir;
 app.locals.reportsDir     = reportsDir;
